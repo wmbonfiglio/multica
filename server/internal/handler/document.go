@@ -149,6 +149,11 @@ type RestoreDocumentRequest struct {
 	RevisionNumber int `json:"revision_number"`
 }
 
+type UpdateTagsRequest struct {
+	Add    []string `json:"add"`
+	Remove []string `json:"remove"`
+}
+
 type LinkDocumentRequest struct {
 	DocumentID *string `json:"document_id"`
 	Path       *string `json:"path"`
@@ -605,6 +610,46 @@ func (h *Handler) RenameDocument(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, documentToResponse(doc))
 }
 
+func (h *Handler) UpdateTags(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace_id is required")
+		return
+	}
+	if !h.requireDocWriteAccess(w, r, workspaceID) {
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	doc, ok := h.loadDocumentForWorkspace(w, r, id, workspaceID)
+	if !ok {
+		return
+	}
+
+	var req UpdateTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if len(req.Add) == 0 && len(req.Remove) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one of add or remove is required")
+		return
+	}
+
+	prov := provenanceFromRequest(r)
+
+	updated, err := h.DocumentService.UpdateTags(r.Context(), doc.ID, req.Add, req.Remove, prov)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update tags: "+err.Error())
+		return
+	}
+
+	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
+	h.publish(protocol.EventDocumentUpdated, workspaceID, actorType, actorID, map[string]any{"document": documentToResponse(*updated)})
+	writeJSON(w, http.StatusOK, documentToResponse(*updated))
+}
+
 func (h *Handler) PinDocument(w http.ResponseWriter, r *http.Request) {
 	h.setDocumentPinned(w, r, true)
 }
@@ -629,17 +674,17 @@ func (h *Handler) setDocumentPinned(w http.ResponseWriter, r *http.Request, pinn
 		return
 	}
 
-	err := h.Queries.SetWorkspaceDocumentPinned(r.Context(), db.SetWorkspaceDocumentPinnedParams{
-		ID:     doc.ID,
-		Pinned: pinned,
-	})
+	prov := provenanceFromRequest(r)
+
+	updated, err := h.DocumentService.SetPinned(r.Context(), doc.ID, pinned, prov)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update pin status")
+		writeError(w, http.StatusInternalServerError, "failed to update pin status: "+err.Error())
 		return
 	}
 
-	doc.Pinned = pinned
-	writeJSON(w, http.StatusOK, documentToResponse(doc))
+	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
+	h.publish(protocol.EventDocumentUpdated, workspaceID, actorType, actorID, map[string]any{"document": documentToResponse(*updated)})
+	writeJSON(w, http.StatusOK, documentToResponse(*updated))
 }
 
 func (h *Handler) ArchiveDocument(w http.ResponseWriter, r *http.Request) {
@@ -658,8 +703,10 @@ func (h *Handler) ArchiveDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Queries.ArchiveWorkspaceDocument(r.Context(), doc.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to archive document")
+	prov := provenanceFromRequest(r)
+
+	if err := h.DocumentService.Archive(r.Context(), doc.ID, prov); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to archive document: "+err.Error())
 		return
 	}
 

@@ -121,6 +121,13 @@ var docRevertCmd = &cobra.Command{
 	RunE:  runDocRevert,
 }
 
+var docTagCmd = &cobra.Command{
+	Use:   "tag <path>",
+	Short: "Add or remove tags on a document",
+	Args:  exactArgs(1),
+	RunE:  runDocTag,
+}
+
 var docLinkCmd = &cobra.Command{
 	Use:   "link <issue-id> <path>",
 	Short: "Link a document to an issue",
@@ -151,6 +158,7 @@ func init() {
 	docCmd.AddCommand(docHistoryCmd)
 	docCmd.AddCommand(docDiffCmd)
 	docCmd.AddCommand(docRevertCmd)
+	docCmd.AddCommand(docTagCmd)
 	docCmd.AddCommand(docLinkCmd)
 	docCmd.AddCommand(docUnlinkCmd)
 
@@ -203,6 +211,11 @@ func init() {
 	// doc revert
 	docRevertCmd.Flags().Int("to-rev", 0, "Revision number to revert to (required)")
 	docRevertCmd.Flags().String("output", "json", "Output format: table or json")
+
+	// doc tag
+	docTagCmd.Flags().String("add", "", "Comma-separated tags to add")
+	docTagCmd.Flags().String("remove", "", "Comma-separated tags to remove")
+	docTagCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// doc link
 	docLinkCmd.Flags().String("type", "referenced", "Link type: referenced, produced, or consumed")
@@ -824,6 +837,55 @@ func runDocRevert(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Document reverted to revision %d: %s\n", revNum, args[0])
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// doc tag
+// ---------------------------------------------------------------------------
+
+func runDocTag(cmd *cobra.Command, args []string) error {
+	addStr, _ := cmd.Flags().GetString("add")
+	removeStr, _ := cmd.Flags().GetString("remove")
+
+	if addStr == "" && removeStr == "" {
+		return fmt.Errorf("at least one of --add or --remove is required")
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Get document by path to find its ID.
+	var doc map[string]any
+	if err := client.GetJSON(ctx, "/api/documents/by-path/"+args[0], &doc); err != nil {
+		return fmt.Errorf("get document: %w", err)
+	}
+
+	docID := strVal(doc, "id")
+	body := map[string]any{}
+	if addStr != "" {
+		body["add"] = strings.Split(addStr, ",")
+	}
+	if removeStr != "" {
+		body["remove"] = strings.Split(removeStr, ",")
+	}
+
+	var result map[string]any
+	if err := client.PostJSON(ctx, "/api/documents/"+docID+"/tags", body, &result); err != nil {
+		return fmt.Errorf("update tags: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+
+	fmt.Printf("Tags updated: %s\n", args[0])
 	return nil
 }
 

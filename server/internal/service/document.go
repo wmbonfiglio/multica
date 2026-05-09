@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/textpatch"
@@ -369,6 +370,224 @@ func (s *DocumentService) Restore(
 	doc.Tags = oldRev.Tags
 	doc.CurrentRevisionID = rev.ID
 	return &doc, nil
+}
+
+// UpdateTags adds and removes tags atomically, creating a new revision with operation='tag'.
+func (s *DocumentService) UpdateTags(
+	ctx context.Context,
+	documentID pgtype.UUID,
+	addTags, removeTags []string,
+	provenance DocumentProvenance,
+) (*db.WorkspaceDocument, error) {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := s.Queries.WithTx(tx)
+
+	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	if err != nil {
+		return nil, fmt.Errorf("get document: %w", err)
+	}
+
+	// Build new tag set: start with existing, add new, remove unwanted.
+	tagSet := make(map[string]struct{}, len(doc.Tags))
+	for _, t := range doc.Tags {
+		tagSet[t] = struct{}{}
+	}
+	for _, t := range addTags {
+		tagSet[t] = struct{}{}
+	}
+	for _, t := range removeTags {
+		delete(tagSet, t)
+	}
+	newTags := make([]string, 0, len(tagSet))
+	for t := range tagSet {
+		newTags = append(newTags, t)
+	}
+	// Sort for deterministic output.
+	sortStrings(newTags)
+
+	maxRev, err := qtx.GetMaxRevisionNumber(ctx, doc.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get max revision: %w", err)
+	}
+
+	rev, err := qtx.InsertWorkspaceDocumentRevision(ctx, db.InsertWorkspaceDocumentRevisionParams{
+		DocumentID:     doc.ID,
+		RevisionNumber: int32(maxRev + 1),
+		ParentRevision: doc.CurrentRevisionID,
+		Title:          doc.Title,
+		Description:    doc.Description,
+		Content:        doc.Content,
+		Tags:           newTags,
+		AuthorType:     provenance.AuthorType,
+		AuthorID:       provenanceAuthorToNullableUUID(provenance.AuthorID),
+		TaskID:         provenanceTaskToNullableUUID(provenance.TaskID),
+		Operation:      "tag",
+		ChangeSummary:  util.StrToText("Updated tags"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("insert revision: %w", err)
+	}
+
+	err = qtx.UpdateWorkspaceDocumentContent(ctx, db.UpdateWorkspaceDocumentContentParams{
+		ID:                doc.ID,
+		Content:           doc.Content,
+		Title:             doc.Title,
+		Description:       doc.Description,
+		Tags:              newTags,
+		CurrentRevisionID: rev.ID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update document: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	doc.Tags = newTags
+	doc.CurrentRevisionID = rev.ID
+	return &doc, nil
+}
+
+// SetPinned pins or unpins a document, creating a new revision with operation='pin'.
+func (s *DocumentService) SetPinned(
+	ctx context.Context,
+	documentID pgtype.UUID,
+	pinned bool,
+	provenance DocumentProvenance,
+) (*db.WorkspaceDocument, error) {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := s.Queries.WithTx(tx)
+
+	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	if err != nil {
+		return nil, fmt.Errorf("get document: %w", err)
+	}
+
+	err = qtx.SetWorkspaceDocumentPinned(ctx, db.SetWorkspaceDocumentPinnedParams{
+		ID:     doc.ID,
+		Pinned: pinned,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("set pinned: %w", err)
+	}
+
+	maxRev, err := qtx.GetMaxRevisionNumber(ctx, doc.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get max revision: %w", err)
+	}
+
+	summary := "Pinned"
+	if !pinned {
+		summary = "Unpinned"
+	}
+
+	rev, err := qtx.InsertWorkspaceDocumentRevision(ctx, db.InsertWorkspaceDocumentRevisionParams{
+		DocumentID:     doc.ID,
+		RevisionNumber: int32(maxRev + 1),
+		ParentRevision: doc.CurrentRevisionID,
+		Title:          doc.Title,
+		Description:    doc.Description,
+		Content:        doc.Content,
+		Tags:           doc.Tags,
+		AuthorType:     provenance.AuthorType,
+		AuthorID:       provenanceAuthorToNullableUUID(provenance.AuthorID),
+		TaskID:         provenanceTaskToNullableUUID(provenance.TaskID),
+		Operation:      "pin",
+		ChangeSummary:  util.StrToText(summary),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("insert revision: %w", err)
+	}
+
+	// Update current_revision_id to point to the new revision.
+	err = qtx.UpdateWorkspaceDocumentContent(ctx, db.UpdateWorkspaceDocumentContentParams{
+		ID:                doc.ID,
+		Content:           doc.Content,
+		Title:             doc.Title,
+		Description:       doc.Description,
+		Tags:              doc.Tags,
+		CurrentRevisionID: rev.ID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update document: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	doc.Pinned = pinned
+	doc.CurrentRevisionID = rev.ID
+	return &doc, nil
+}
+
+// Archive soft-deletes a document, creating a new revision with operation='archive'.
+func (s *DocumentService) Archive(
+	ctx context.Context,
+	documentID pgtype.UUID,
+	provenance DocumentProvenance,
+) error {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := s.Queries.WithTx(tx)
+
+	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	if err != nil {
+		return fmt.Errorf("get document: %w", err)
+	}
+
+	maxRev, err := qtx.GetMaxRevisionNumber(ctx, doc.ID)
+	if err != nil {
+		return fmt.Errorf("get max revision: %w", err)
+	}
+
+	_, err = qtx.InsertWorkspaceDocumentRevision(ctx, db.InsertWorkspaceDocumentRevisionParams{
+		DocumentID:     doc.ID,
+		RevisionNumber: int32(maxRev + 1),
+		ParentRevision: doc.CurrentRevisionID,
+		Title:          doc.Title,
+		Description:    doc.Description,
+		Content:        doc.Content,
+		Tags:           doc.Tags,
+		AuthorType:     provenance.AuthorType,
+		AuthorID:       provenanceAuthorToNullableUUID(provenance.AuthorID),
+		TaskID:         provenanceTaskToNullableUUID(provenance.TaskID),
+		Operation:      "archive",
+		ChangeSummary:  util.StrToText("Archived"),
+	})
+	if err != nil {
+		return fmt.Errorf("insert revision: %w", err)
+	}
+
+	if err := qtx.ArchiveWorkspaceDocument(ctx, doc.ID); err != nil {
+		return fmt.Errorf("archive document: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	return nil
+}
+
+// sortStrings sorts a string slice in place.
+func sortStrings(s []string) {
+	sort.Strings(s)
 }
 
 // provenanceAuthorToNullableUUID converts a *pgtype.UUID to a pgtype.UUID,
