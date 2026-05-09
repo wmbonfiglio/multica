@@ -296,6 +296,37 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Post("/runtimes/{runtimeId}/recover-orphans", h.RecoverOrphanedTasks)
 		r.Post("/tasks/{taskId}/session", h.PinTaskSession)
+
+		// Document endpoints for daemon/agent access.
+		// workspaceIDFromURL copies the chi URL param into X-Workspace-ID
+		// so h.resolveWorkspaceID(r) can find it via the standard header path.
+		r.Route("/workspaces/{workspaceId}/documents", func(r chi.Router) {
+			r.Use(workspaceIDFromURLParam("workspaceId"))
+			r.Get("/", h.ListDocuments)
+			r.Get("/index", h.ListDocumentIndex)
+			r.Get("/tree", h.ListDocumentTree)
+			r.Get("/search", h.SearchDocuments)
+			r.Get("/by-path/*", h.GetDocumentByPath)
+			r.Put("/by-path/*", h.UpsertDocumentByPath)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Get("/", h.GetDocumentByID)
+				r.Post("/patch", h.PatchDocument)
+				r.Post("/rename", h.RenameDocument)
+				r.Post("/pin", h.PinDocument)
+				r.Post("/unpin", h.UnpinDocument)
+				r.Post("/archive", h.ArchiveDocument)
+				r.Get("/revisions", h.ListDocumentRevisions)
+				r.Get("/revisions/{n}", h.GetDocumentRevision)
+				r.Post("/restore", h.RestoreDocument)
+			})
+		})
+
+		// Issue-Document links for daemon/agent access
+		r.Route("/issues/{issueId}/documents", func(r chi.Router) {
+			r.Get("/links", h.ListIssueDocumentLinks)
+			r.Post("/links", h.LinkIssueDocument)
+			r.Delete("/links/{documentId}", h.UnlinkIssueDocument)
+		})
 	})
 
 	// Protected API routes
@@ -532,6 +563,34 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/{slug}", h.GetAgentTemplate)
 			})
 
+			// Documents
+			r.Route("/api/documents", func(r chi.Router) {
+				r.Get("/", h.ListDocuments)
+				r.Get("/index", h.ListDocumentIndex)
+				r.Get("/tree", h.ListDocumentTree)
+				r.Get("/search", h.SearchDocuments)
+				r.Get("/by-path/*", h.GetDocumentByPath)
+				r.Put("/by-path/*", h.UpsertDocumentByPath)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetDocumentByID)
+					r.Post("/patch", h.PatchDocument)
+					r.Post("/rename", h.RenameDocument)
+					r.Post("/pin", h.PinDocument)
+					r.Post("/unpin", h.UnpinDocument)
+					r.Post("/archive", h.ArchiveDocument)
+					r.Get("/revisions", h.ListDocumentRevisions)
+					r.Get("/revisions/{n}", h.GetDocumentRevision)
+					r.Post("/restore", h.RestoreDocument)
+				})
+			})
+
+			// Issue-Document links
+			r.Route("/api/issues/{issueId}/documents", func(r chi.Router) {
+				r.Get("/links", h.ListIssueDocumentLinks)
+				r.Post("/links", h.LinkIssueDocument)
+				r.Delete("/links/{documentId}", h.UnlinkIssueDocument)
+			})
+
 			// Skills
 			r.Route("/api/skills", func(r chi.Router) {
 				r.Get("/", h.ListSkills)
@@ -703,6 +762,20 @@ func optionalUUID(s string) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return util.MustParseUUID(s)
+}
+
+// workspaceIDFromURLParam copies the chi URL param into the X-Workspace-ID
+// header so handler.resolveWorkspaceID can find it via the standard path.
+// Used for daemon document routes where the workspace ID is in the URL.
+func workspaceIDFromURLParam(param string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if wsID := chi.URLParam(r, param); wsID != "" {
+				r.Header.Set("X-Workspace-ID", wsID)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func splitAndTrim(s string) []string {
