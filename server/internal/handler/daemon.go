@@ -1242,6 +1242,43 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Populate knowledge base context for agent prompt injection.
+		// Use resp.WorkspaceID (already resolved above) to avoid scoping issues.
+		if wsID := parseUUID(resp.WorkspaceID); wsID.Valid {
+			if ws, err := h.Queries.GetWorkspace(r.Context(), wsID); err == nil && ws.Context.Valid {
+				resp.WorkspaceContext = ws.Context.String
+			}
+			if pinnedDocs, err := h.Queries.ListPinnedWorkspaceDocuments(r.Context(), wsID); err == nil {
+				for _, d := range pinnedDocs {
+					resp.PinnedDocuments = append(resp.PinnedDocuments, DocumentData{
+						Path:        d.Path,
+						Title:       d.Title.String,
+						Description: d.Description.String,
+						Content:     d.Content,
+					})
+				}
+			}
+			if indexRows, err := h.Queries.ListWorkspaceDocumentIndex(r.Context(), wsID); err == nil {
+				for _, row := range indexRows {
+					resp.DocumentIndex = append(resp.DocumentIndex, DocumentIndexData{
+						Path:        row.Path,
+						Description: row.Description.String,
+						Pinned:      row.Pinned,
+					})
+				}
+			}
+		}
+		if linkedDocs, err := h.Queries.ListLinkedDocumentsForIssue(r.Context(), task.IssueID); err == nil {
+			for _, d := range linkedDocs {
+				resp.IssueLinkedDocuments = append(resp.IssueLinkedDocuments, DocumentData{
+					Path:        d.Path,
+					Title:       d.Title.String,
+					Description: d.Description.String,
+					Content:     d.Content,
+				})
+			}
+		}
+
 		// Fetch the triggering comment content so the daemon can embed it
 		// directly in the agent prompt (prevents the agent from ignoring comments
 		// when stale output files exist in a reused workdir). Also surface the

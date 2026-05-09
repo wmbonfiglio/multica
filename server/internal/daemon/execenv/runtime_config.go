@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -108,6 +109,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
+	// Knowledge base sections — injected before commands so the agent sees
+	// workspace context and KB index early in its prompt.
+	writeKBSections(&b, ctx)
+
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("**Use `--output json` for structured data.** Human table output now prints routable issue keys (for example `MUL-123`) and short UUID prefixes for workspace resources; use `--full-id` on list commands when you need canonical UUIDs.\n\n")
 	b.WriteString("The default brief includes the commands needed for the core agent loop and common issue create/update tasks. For everything else, run `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help`; prefer `--output json` when the command supports it.\n\n")
@@ -134,7 +139,16 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// escaping correctly and can pick whichever flag suits their
 	// content. The `--content-file` line in the menu doubles as a
 	// pointer at the Windows-safe path.
-	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a comment. Pick the input mode that preserves your content; run `multica issue comment add --help` for details.\n\n")
+	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a comment. Pick the input mode that preserves your content; run `multica issue comment add --help` for details.\n")
+	b.WriteString("- `multica doc list [--path-prefix <prefix>] [--tag <tag>] [--pinned] [--output json]` — List knowledge base documents\n")
+	b.WriteString("- `multica doc get <path>` — Read a KB document's content\n")
+	b.WriteString("- `multica doc tree [--path-prefix <prefix>]` — Show KB document tree\n")
+	b.WriteString("- `multica doc search \"<query>\" [--limit N]` — Full-text search across KB documents\n")
+	b.WriteString("- `multica doc put <path> --content-stdin [--title T] [--description D] [--tags t1,t2]` — Create or update a KB document (pipe content via stdin)\n")
+	b.WriteString("- `multica doc patch <path> --find \"...\" --replace \"...\" [--summary \"...\"]` — Surgically edit a KB document\n")
+	b.WriteString("- `multica doc link <issue-id> <path> [--type referenced|consumed|produced]` — Link a KB document to an issue\n")
+	b.WriteString("- `multica doc unlink <issue-id> <path>` — Unlink a KB document from an issue\n")
+	b.WriteString("- `multica doc pin <path>` / `multica doc unpin <path>` — Pin/unpin a document for auto-injection\n\n")
 
 	if provider == "codex" {
 		b.WriteString("## Codex-Specific Comment Formatting\n\n")
@@ -342,4 +356,222 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	}
 
 	return b.String()
+}
+
+// Token budget constants for KB injection.
+const (
+	maxPinnedDocs      = 5
+	maxPinnedTokens    = 4000
+	maxIndexEntries    = 200
+	maxLinkedDocs      = 10
+	maxLinkedTokens    = 6000
+)
+
+// estimateTokens returns a rough token count (len/4).
+func estimateTokens(s string) int {
+	return len(s) / 4
+}
+
+// truncateDocsForBudget returns a prefix of docs that fits within maxItems and
+// maxTokens (estimated as len/4). If truncated, the second return value is the
+// count of items dropped.
+func truncateDocsForBudget(docs []DocumentForEnv, maxItems, maxTokens int) ([]DocumentForEnv, int) {
+	if len(docs) == 0 {
+		return docs, 0
+	}
+	var result []DocumentForEnv
+	totalTokens := 0
+	for _, d := range docs {
+		if len(result) >= maxItems {
+			break
+		}
+		t := estimateTokens(d.Content)
+		if len(result) > 0 && totalTokens+t > maxTokens {
+			break
+		}
+		totalTokens += t
+		result = append(result, d)
+	}
+	return result, len(docs) - len(result)
+}
+
+// writeKBSections renders the 4 knowledge base sections into the builder.
+// Sections with no data are omitted entirely.
+func writeKBSections(b *strings.Builder, ctx TaskContextForEnv) {
+	hasAnyKB := ctx.WorkspaceContext != "" || len(ctx.PinnedDocuments) > 0 ||
+		len(ctx.DocumentIndex) > 0 || len(ctx.IssueLinkedDocuments) > 0
+
+	if !hasAnyKB {
+		return
+	}
+
+	// §1 — Workspace overview
+	if ctx.WorkspaceContext != "" {
+		b.WriteString("## Workspace overview\n\n")
+		b.WriteString(ctx.WorkspaceContext)
+		b.WriteString("\n\n")
+	}
+
+	// §2 — Pinned documents
+	if len(ctx.PinnedDocuments) > 0 {
+		pinned, dropped := truncateDocsForBudget(ctx.PinnedDocuments, maxPinnedDocs, maxPinnedTokens)
+		b.WriteString("## Pinned documents\n\n")
+		for i, d := range pinned {
+			fmt.Fprintf(b, "### %s\n\n", d.Path)
+			b.WriteString(d.Content)
+			b.WriteString("\n")
+			if i < len(pinned)-1 {
+				b.WriteString("\n---\n\n")
+			}
+		}
+		if dropped > 0 {
+			fmt.Fprintf(b, "\n\n> *(%d more pinned documents omitted due to token budget)*\n", dropped)
+		}
+		b.WriteString("\n")
+	}
+
+	// §3 — Knowledge base index
+	if len(ctx.DocumentIndex) > 0 {
+		b.WriteString("## Knowledge base index\n\n")
+		b.WriteString("You have access to a workspace knowledge base. The tree below is everything\n")
+		b.WriteString("that exists. Read individual files with `multica doc get <path>`.\n\n")
+		b.WriteString("```\n")
+		index := ctx.DocumentIndex
+		if len(index) > maxIndexEntries {
+			index = index[:maxIndexEntries]
+		}
+		b.WriteString(renderIndexTree(index))
+		if len(ctx.DocumentIndex) > maxIndexEntries {
+			fmt.Fprintf(b, "\n... and %d more entries (use `multica doc list` to see all)\n", len(ctx.DocumentIndex)-maxIndexEntries)
+		}
+		b.WriteString("```\n\n")
+	}
+
+	// §4 — Linked to this issue
+	if len(ctx.IssueLinkedDocuments) > 0 {
+		linked, dropped := truncateDocsForBudget(ctx.IssueLinkedDocuments, maxLinkedDocs, maxLinkedTokens)
+		b.WriteString("## Linked to this issue\n\n")
+		for i, d := range linked {
+			fmt.Fprintf(b, "### %s\n\n", d.Path)
+			b.WriteString(d.Content)
+			b.WriteString("\n")
+			if i < len(linked)-1 {
+				b.WriteString("\n---\n\n")
+			}
+		}
+		if dropped > 0 {
+			fmt.Fprintf(b, "\n\n> *(%d more linked documents omitted due to token budget)*\n", dropped)
+		}
+		b.WriteString("\n")
+	}
+
+	// §5 — Knowledge base usage instructions
+	b.WriteString("## Knowledge base usage\n\n")
+	b.WriteString("1. Look at the index above; identify docs likely relevant to this task.\n")
+	b.WriteString("2. Read with `multica doc get <path>`.\n")
+	b.WriteString("3. Cite docs you used in your final comment with `[path](mention://doc/<path>)`.\n")
+	b.WriteString("4. Write back insights worth keeping with `multica doc put <path>`.\n")
+	b.WriteString("   Use a clear path like `clients/<name>/research/<topic>.md`.\n")
+	b.WriteString("5. Update existing docs surgically with `multica doc patch <path> --find ... --replace ...`.\n")
+	b.WriteString("6. Link the issue to docs you used or produced:\n")
+	b.WriteString("   `multica doc link <issue-id> <path> --type referenced|consumed|produced`.\n")
+	b.WriteString("Pinned docs above are already loaded — do not re-read them.\n\n")
+}
+
+// renderIndexTree renders the document index as an ASCII tree.
+// Paths must be sorted alphabetically (they come from the DB ORDER BY path).
+func renderIndexTree(entries []DocumentIndexEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+
+	// Build a simple tree structure.
+	type node struct {
+		name        string
+		desc        string
+		pinned      bool
+		isFile      bool
+		children    []*node
+		childrenMap map[string]*node
+	}
+
+	root := &node{childrenMap: make(map[string]*node)}
+
+	for _, e := range entries {
+		parts := strings.Split(e.Path, "/")
+		cur := root
+		for i, part := range parts {
+			isLast := i == len(parts)-1
+			child, ok := cur.childrenMap[part]
+			if !ok {
+				child = &node{
+					name:        part,
+					childrenMap: make(map[string]*node),
+				}
+				cur.children = append(cur.children, child)
+				cur.childrenMap[part] = child
+			}
+			if isLast {
+				child.isFile = true
+				child.desc = e.Description
+				child.pinned = e.Pinned
+			}
+			cur = child
+		}
+	}
+
+	// Sort children at each level.
+	var sortChildren func(n *node)
+	sortChildren = func(n *node) {
+		sort.Slice(n.children, func(i, j int) bool {
+			// Directories first, then files.
+			iDir := !n.children[i].isFile || len(n.children[i].children) > 0
+			jDir := !n.children[j].isFile || len(n.children[j].children) > 0
+			if iDir != jDir {
+				return iDir
+			}
+			return n.children[i].name < n.children[j].name
+		})
+		for _, c := range n.children {
+			sortChildren(c)
+		}
+	}
+	sortChildren(root)
+
+	// Render tree with box-drawing characters.
+	var out strings.Builder
+	var render func(n *node, prefix string, isLast bool, isRoot bool)
+	render = func(n *node, prefix string, isLast bool, isRoot bool) {
+		if !isRoot {
+			connector := "├── "
+			if isLast {
+				connector = "└── "
+			}
+			label := n.name
+			if len(n.children) > 0 && !n.isFile {
+				label += "/"
+			}
+			if n.isFile && n.desc != "" {
+				label += "  — " + n.desc
+			}
+			if n.isFile && n.pinned {
+				label += " 📌"
+			}
+			out.WriteString(prefix + connector + label + "\n")
+		}
+		childPrefix := prefix
+		if !isRoot {
+			if isLast {
+				childPrefix += "    "
+			} else {
+				childPrefix += "│   "
+			}
+		}
+		for i, child := range n.children {
+			render(child, childPrefix, i == len(n.children)-1, false)
+		}
+	}
+	render(root, "", true, true)
+
+	return out.String()
 }

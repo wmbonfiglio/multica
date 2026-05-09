@@ -62,6 +62,27 @@ type TaskContextForEnv struct {
 	AutopilotTriggerPayload string
 	QuickCreatePrompt       string // non-empty for quick-create tasks
 	IsSquadLeader           bool   // true when the agent is acting as a squad leader (may exit silently on no_action)
+
+	// Knowledge base context — populated from workspace_document tables.
+	WorkspaceContext     string               // workspace.context content (injected verbatim)
+	PinnedDocuments      []DocumentForEnv     // pinned docs with full content
+	DocumentIndex        []DocumentIndexEntry // compact (path, description) index
+	IssueLinkedDocuments []DocumentForEnv     // docs linked to this issue
+}
+
+// DocumentForEnv represents a KB document with full content for prompt injection.
+type DocumentForEnv struct {
+	Path        string
+	Title       string
+	Description string
+	Content     string
+}
+
+// DocumentIndexEntry represents a single entry in the compact KB index.
+type DocumentIndexEntry struct {
+	Path        string
+	Description string
+	Pinned      bool
 }
 
 // SkillContextForEnv represents a skill to be written into the execution environment.

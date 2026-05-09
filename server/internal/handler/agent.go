@@ -177,6 +177,27 @@ type AgentTaskResponse struct {
 	SquadID                 string                `json:"squad_id,omitempty"`                  // for quick-create tasks where the picker was a squad; Agent is still the resolved leader
 	SquadName               string                `json:"squad_name,omitempty"`                // display name for the picker squad
 	Kind                    string                `json:"kind"`                                // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+
+	// Knowledge base context for agent prompt injection.
+	WorkspaceContext     string                    `json:"workspace_context,omitempty"`
+	PinnedDocuments      []DocumentData            `json:"pinned_documents,omitempty"`
+	DocumentIndex        []DocumentIndexData       `json:"document_index,omitempty"`
+	IssueLinkedDocuments []DocumentData            `json:"issue_linked_documents,omitempty"`
+}
+
+// DocumentData represents a KB document for the claim response.
+type DocumentData struct {
+	Path        string `json:"path"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+}
+
+// DocumentIndexData represents a compact KB index entry.
+type DocumentIndexData struct {
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+	Pinned      bool   `json:"pinned,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in

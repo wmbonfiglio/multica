@@ -61,6 +61,12 @@ type Task struct {
 	QuickCreatePrompt       string          `json:"quick_create_prompt,omitempty"`       // user's natural-language input for quick-create tasks
 	SquadID                 string          `json:"squad_id,omitempty"`                  // when the picker was a squad, the squad's UUID; Agent is still the resolved leader
 	SquadName               string          `json:"squad_name,omitempty"`                // display name for the picker squad, used in prompt text
+
+	// Knowledge base context.
+	WorkspaceContext     string              `json:"workspace_context,omitempty"`
+	PinnedDocuments      []DocumentData      `json:"pinned_documents,omitempty"`
+	DocumentIndex        []DocumentIndexData `json:"document_index,omitempty"`
+	IssueLinkedDocuments []DocumentData      `json:"issue_linked_documents,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon
@@ -72,6 +78,21 @@ type ChatAttachmentMeta struct {
 	ID          string `json:"id"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type,omitempty"`
+}
+
+// DocumentData represents a KB document with full content.
+type DocumentData struct {
+	Path        string `json:"path"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+}
+
+// DocumentIndexData represents a compact KB index entry.
+type DocumentIndexData struct {
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+	Pinned      bool   `json:"pinned,omitempty"`
 }
 
 // AgentData holds agent details returned by the claim endpoint.
