@@ -70,13 +70,14 @@ export function DocumentDetailPage({ documentId }: DocumentDetailPageProps) {
   );
 
   const handleSave = useCallback(
-    (content: string) => {
+    (content: string, force?: boolean) => {
       if (!document) return;
       updateContent.mutate(
         {
           path: document.path,
           content,
-          change_summary: "Edit via web UI",
+          change_summary: force ? "Manual save" : "Autosave",
+          force_new_revision: force,
         },
         {
           onError: (err) => {

@@ -75,6 +75,7 @@ export interface UpsertDocumentRequest {
   tags?: string[];
   base_revision_id?: string;
   change_summary?: string;
+  force_new_revision?: boolean;
 }
 
 export interface PatchDocumentRequest {

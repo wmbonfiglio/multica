@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/textpatch"
@@ -14,14 +16,22 @@ import (
 
 var (
 	ErrDocumentConflict = errors.New("document revision conflict: base revision is stale")
+	ErrInvalidPath      = errors.New("invalid document path: must be a slug-like path ending in .md (e.g., 'folder/doc.md')")
 )
+
+var pathRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9/_\-]*\.md$`)
+
+func isValidPath(path string) bool {
+	return pathRegex.MatchString(path)
+}
 
 // DocumentPayload holds the mutable fields for a document upsert.
 type DocumentPayload struct {
-	Title         *string
-	Description   *string
-	Content       string
-	Tags          []string
+	Title            *string
+	Description      *string
+	Content          string
+	Tags             []string
+	ForceNewRevision bool
 }
 
 // DocumentProvenance captures who is making the change.
@@ -37,9 +47,11 @@ type DocumentService struct {
 	TxStarter TxStarter
 }
 
+const collapseRevisionWindow = 5 * time.Minute
+
 // Put upserts a document at the given path. If baseRevisionID is non-nil
 // and doesn't match the document's current revision, returns ErrDocumentConflict.
-// Every mutation creates an append-only revision record.
+// Every mutation creates or updates an append-only revision record.
 func (s *DocumentService) Put(
 	ctx context.Context,
 	workspaceID pgtype.UUID,
@@ -49,6 +61,10 @@ func (s *DocumentService) Put(
 	baseRevisionID *pgtype.UUID,
 	changeSummary string,
 ) (*db.WorkspaceDocument, error) {
+	if !isValidPath(path) {
+		return nil, ErrInvalidPath
+	}
+
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -65,21 +81,20 @@ func (s *DocumentService) Put(
 
 	isNew := err != nil // pgx returns ErrNoRows for not found
 
-	if isNew {
-		// Create new document.
-		tags := payload.Tags
-		if tags == nil {
-			tags = []string{}
-		}
-		title := pgtype.Text{}
-		if payload.Title != nil {
-			title = pgtype.Text{String: *payload.Title, Valid: true}
-		}
-		desc := pgtype.Text{}
-		if payload.Description != nil {
-			desc = pgtype.Text{String: *payload.Description, Valid: true}
-		}
+	title := pgtype.Text{}
+	if payload.Title != nil {
+		title = pgtype.Text{String: *payload.Title, Valid: true}
+	}
+	desc := pgtype.Text{}
+	if payload.Description != nil {
+		desc = pgtype.Text{String: *payload.Description, Valid: true}
+	}
+	tags := payload.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 
+	if isNew {
 		doc, err := qtx.CreateWorkspaceDocument(ctx, db.CreateWorkspaceDocumentParams{
 			WorkspaceID: workspaceID,
 			Path:        path,
@@ -141,54 +156,82 @@ func (s *DocumentService) Put(
 		}
 	}
 
-	// Get next revision number.
-	maxRev, err := qtx.GetMaxRevisionNumber(ctx, existing.ID)
-	if err != nil {
-		return nil, fmt.Errorf("get max revision: %w", err)
-	}
-	nextRev := maxRev + 1
+	// Determine if we should collapse into the last revision.
+	canCollapse := false
+	if !payload.ForceNewRevision && existing.CurrentRevisionID.Valid {
+		revs, err := qtx.ListWorkspaceDocumentRevisions(ctx, existing.ID)
+		if err == nil && len(revs) > 0 {
+			lastRev := revs[0]
+			sameAuthor := lastRev.AuthorType == provenance.AuthorType &&
+				lastRev.AuthorID == provenanceAuthorToNullableUUID(provenance.AuthorID)
+			inWindow := time.Since(lastRev.CreatedAt.Time) < collapseRevisionWindow
+			isEdit := lastRev.Operation == "edit" || lastRev.Operation == "create"
 
-	title := existing.Title
-	if payload.Title != nil {
-		title = pgtype.Text{String: *payload.Title, Valid: true}
-	}
-	desc := existing.Description
-	if payload.Description != nil {
-		desc = pgtype.Text{String: *payload.Description, Valid: true}
-	}
-	tags := payload.Tags
-	if tags == nil {
-		tags = existing.Tags
+			if sameAuthor && inWindow && isEdit {
+				canCollapse = true
+			}
+		}
 	}
 
-	rev, err := qtx.InsertWorkspaceDocumentRevision(ctx, db.InsertWorkspaceDocumentRevisionParams{
-		DocumentID:     existing.ID,
-		RevisionNumber: int32(nextRev),
-		ParentRevision: existing.CurrentRevisionID,
-		Title:          title,
-		Description:    desc,
-		Content:        payload.Content,
-		Tags:           tags,
-		AuthorType:     provenance.AuthorType,
-		AuthorID:       provenanceAuthorToNullableUUID(provenance.AuthorID),
-		TaskID:         provenanceTaskToNullableUUID(provenance.TaskID),
-		Operation:      "edit",
-		ChangeSummary:  util.StrToText(changeSummary),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("insert revision: %w", err)
-	}
+	if canCollapse {
+		// Update the existing revision instead of creating a new one.
+		_, err = tx.Exec(ctx, `
+			UPDATE workspace_document_revision
+			SET content = $2, title = $3, description = $4, tags = $5, change_summary = $6, created_at = now()
+			WHERE id = $1
+		`, existing.CurrentRevisionID, payload.Content, title, desc, tags, util.StrToText(changeSummary))
+		if err != nil {
+			return nil, fmt.Errorf("collapse revision: %w", err)
+		}
 
-	err = qtx.UpdateWorkspaceDocumentContent(ctx, db.UpdateWorkspaceDocumentContentParams{
-		ID:                existing.ID,
-		Content:           payload.Content,
-		Title:             title,
-		Description:       desc,
-		Tags:              tags,
-		CurrentRevisionID: rev.ID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("update document: %w", err)
+		err = qtx.UpdateWorkspaceDocumentContent(ctx, db.UpdateWorkspaceDocumentContentParams{
+			ID:                existing.ID,
+			Content:           payload.Content,
+			Title:             title,
+			Description:       desc,
+			Tags:              tags,
+			CurrentRevisionID: existing.CurrentRevisionID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("update document: %w", err)
+		}
+	} else {
+		// Create a NEW revision.
+		maxRev, err := qtx.GetMaxRevisionNumber(ctx, existing.ID)
+		if err != nil {
+			return nil, fmt.Errorf("get max revision: %w", err)
+		}
+
+		rev, err := qtx.InsertWorkspaceDocumentRevision(ctx, db.InsertWorkspaceDocumentRevisionParams{
+			DocumentID:     existing.ID,
+			RevisionNumber: int32(maxRev + 1),
+			ParentRevision: existing.CurrentRevisionID,
+			Title:          title,
+			Description:    desc,
+			Content:        payload.Content,
+			Tags:           tags,
+			AuthorType:     provenance.AuthorType,
+			AuthorID:       provenanceAuthorToNullableUUID(provenance.AuthorID),
+			TaskID:         provenanceTaskToNullableUUID(provenance.TaskID),
+			Operation:      "edit",
+			ChangeSummary:  util.StrToText(changeSummary),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("insert revision: %w", err)
+		}
+
+		err = qtx.UpdateWorkspaceDocumentContent(ctx, db.UpdateWorkspaceDocumentContentParams{
+			ID:                existing.ID,
+			Content:           payload.Content,
+			Title:             title,
+			Description:       desc,
+			Tags:              tags,
+			CurrentRevisionID: rev.ID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("update document: %w", err)
+		}
+		existing.CurrentRevisionID = rev.ID
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -199,7 +242,6 @@ func (s *DocumentService) Put(
 	existing.Title = title
 	existing.Description = desc
 	existing.Tags = tags
-	existing.CurrentRevisionID = rev.ID
 	return &existing, nil
 }
 

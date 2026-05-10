@@ -7,13 +7,13 @@ import { useT } from "../../i18n";
 
 interface DocumentEditorProps {
   content: string;
-  onSave: (content: string) => void;
+  onSave: (content: string, force?: boolean) => void;
   disabled?: boolean;
   className?: string;
 }
 
 /**
- * Markdown textarea with debounced autosave (900ms).
+ * Markdown textarea with debounced autosave (900ms) and manual save (Ctrl+S).
  * Ported from the paperclip IssueDocumentsSection pattern.
  */
 export function DocumentEditor({
@@ -27,27 +27,54 @@ export function DocumentEditor({
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "unsaved">("saved");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSaveRef = useRef(onSave);
+  const lastSavedRef = useRef(content);
   onSaveRef.current = onSave;
 
   // Reset draft when content changes externally (e.g. revision restore)
   useEffect(() => {
     setDraft(content);
+    lastSavedRef.current = content;
     setSaveStatus("saved");
   }, [content]);
+
+  const handleManualSave = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setSaveStatus("saving");
+    lastSavedRef.current = draft;
+    onSaveRef.current(draft, true); // true = force new revision
+    setSaveStatus("saved");
+  }, [draft]);
 
   const scheduleSave = useCallback(
     (value: string) => {
       if (timerRef.current) clearTimeout(timerRef.current);
       setSaveStatus("unsaved");
       timerRef.current = setTimeout(() => {
+        // Skip save if content hasn't changed since last save
+        if (value === lastSavedRef.current) {
+          setSaveStatus("saved");
+          return;
+        }
         setSaveStatus("saving");
-        onSaveRef.current(value);
-        // Assume save succeeds — the mutation's onSuccess will reset
+        lastSavedRef.current = value;
+        onSaveRef.current(value, false); // false = allow collapsing
         setSaveStatus("saved");
       }, 900);
     },
     [],
   );
+
+  // Keyboard shortcut Ctrl+S
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        handleManualSave();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleManualSave]);
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -70,7 +97,16 @@ export function DocumentEditor({
         placeholder={t(($) => $.editor.placeholder)}
         className="flex-1 resize-none rounded-none border-0 font-mono text-sm leading-relaxed focus-visible:ring-0"
       />
-      <div className="flex h-7 shrink-0 items-center justify-end border-t px-3">
+      <div className="flex h-9 shrink-0 items-center justify-between border-t px-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleManualSave}
+            disabled={disabled || saveStatus === "saved"}
+            className="text-[10px] font-medium text-primary hover:underline disabled:text-muted-foreground/50"
+          >
+            {t(($) => $.editor.save_now)} (Ctrl+S)
+          </button>
+        </div>
         <span
           className={cn(
             "text-[10px]",

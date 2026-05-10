@@ -127,12 +127,13 @@ func revisionDetailToResponse(r db.WorkspaceDocumentRevision) DocumentRevisionDe
 // --- Request structs ---
 
 type UpsertDocumentRequest struct {
-	Title          *string  `json:"title"`
-	Description    *string  `json:"description"`
-	Content        string   `json:"content"`
-	Tags           []string `json:"tags"`
-	BaseRevisionID *string  `json:"base_revision_id"`
-	ChangeSummary  string   `json:"change_summary"`
+	Title            *string  `json:"title"`
+	Description      *string  `json:"description"`
+	Content          string   `json:"content"`
+	Tags             []string `json:"tags"`
+	BaseRevisionID   *string  `json:"base_revision_id"`
+	ChangeSummary    string   `json:"change_summary"`
+	ForceNewRevision bool     `json:"force_new_revision"`
 }
 
 type PatchDocumentRequest struct {
@@ -473,10 +474,11 @@ func (h *Handler) UpsertDocumentByPath(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := service.DocumentPayload{
-		Title:       req.Title,
-		Description: req.Description,
-		Content:     sanitizeNullBytes(req.Content),
-		Tags:        req.Tags,
+		Title:            req.Title,
+		Description:      req.Description,
+		Content:          sanitizeNullBytes(req.Content),
+		Tags:             req.Tags,
+		ForceNewRevision: req.ForceNewRevision,
 	}
 
 	prov := provenanceFromRequest(r)
@@ -493,6 +495,10 @@ func (h *Handler) UpsertDocumentByPath(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.DocumentService.Put(r.Context(), wsUUID, sanitizeNullBytes(path), payload, prov, baseRevID, req.ChangeSummary)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidPath) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, service.ErrDocumentConflict) {
 			writeError(w, http.StatusConflict, "document revision conflict: base revision is stale")
 			return
