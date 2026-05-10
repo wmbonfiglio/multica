@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -42,6 +43,13 @@ var docSearchCmd = &cobra.Command{
 	Short: "Search documents by content",
 	Args:  exactArgs(1),
 	RunE:  runDocSearch,
+}
+
+var docGrepCmd = &cobra.Command{
+	Use:   "grep <regex>",
+	Short: "Search documents by regex (client-side)",
+	Args:  exactArgs(1),
+	RunE:  runDocGrep,
 }
 
 var docGetCmd = &cobra.Command{
@@ -147,6 +155,7 @@ func init() {
 	docCmd.AddCommand(docTreeCmd)
 	docCmd.AddCommand(docIndexCmd)
 	docCmd.AddCommand(docSearchCmd)
+	docCmd.AddCommand(docGrepCmd)
 	docCmd.AddCommand(docGetCmd)
 	docCmd.AddCommand(docShowCmd)
 	docCmd.AddCommand(docPutCmd)
@@ -178,6 +187,11 @@ func init() {
 	// doc search
 	docSearchCmd.Flags().Int("limit", 20, "Maximum results")
 	docSearchCmd.Flags().String("output", "table", "Output format: table or json")
+
+	// doc grep
+	docGrepCmd.Flags().String("path-prefix", "", "Filter by path prefix")
+	docGrepCmd.Flags().Bool("ignore-case", false, "Case-insensitive matching")
+	docGrepCmd.Flags().String("output", "text", "Output format: text or json")
 
 	// doc get
 	docGetCmd.Flags().String("output", "content", "Output format: content (raw text) or json")
@@ -390,6 +404,79 @@ func runDocSearch(cmd *cobra.Command, args []string) error {
 		})
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// doc grep (client-side regex search)
+// ---------------------------------------------------------------------------
+
+func runDocGrep(cmd *cobra.Command, args []string) error {
+	ignoreCase, _ := cmd.Flags().GetBool("ignore-case")
+
+	pattern := args[0]
+	if ignoreCase {
+		pattern = "(?i)" + pattern
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex: %w", err)
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	query := url.Values{}
+	if v, _ := cmd.Flags().GetString("path-prefix"); v != "" {
+		query.Set("path-prefix", v)
+	}
+
+	path := "/api/documents"
+	if len(query) > 0 {
+		path += "?" + query.Encode()
+	}
+
+	var docs []map[string]any
+	if err := client.GetJSON(ctx, path, &docs); err != nil {
+		return fmt.Errorf("list documents: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+
+	type grepMatch struct {
+		Path    string `json:"path"`
+		Line    int    `json:"line"`
+		Content string `json:"content"`
+	}
+
+	var matches []grepMatch
+	for _, d := range docs {
+		docPath := strVal(d, "path")
+		content := strVal(d, "content")
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			if re.MatchString(line) {
+				matches = append(matches, grepMatch{
+					Path:    docPath,
+					Line:    i + 1,
+					Content: line,
+				})
+			}
+		}
+	}
+
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, matches)
+	}
+
+	for _, m := range matches {
+		fmt.Printf("%s:%d:%s\n", m.Path, m.Line, m.Content)
+	}
 	return nil
 }
 

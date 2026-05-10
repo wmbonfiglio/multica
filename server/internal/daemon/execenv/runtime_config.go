@@ -144,6 +144,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica doc get <path>` — Read a KB document's content\n")
 	b.WriteString("- `multica doc tree [--path-prefix <prefix>]` — Show KB document tree\n")
 	b.WriteString("- `multica doc search \"<query>\" [--limit N]` — Full-text search across KB documents\n")
+	b.WriteString("- `multica doc grep \"<regex>\" [--path-prefix <prefix>] [--ignore-case]` — Client-side regex search across KB documents\n")
 	b.WriteString("- `multica doc put <path> --content-stdin [--title T] [--description D] [--tags t1,t2]` — Create or update a KB document (pipe content via stdin)\n")
 	b.WriteString("- `multica doc patch <path> --find \"...\" --replace \"...\" [--summary \"...\"]` — Surgically edit a KB document\n")
 	b.WriteString("- `multica doc link <issue-id> <path> [--type referenced|consumed|produced]` — Link a KB document to an issue\n")
@@ -372,6 +373,57 @@ func estimateTokens(s string) int {
 	return len(s) / 4
 }
 
+// scopeIndexForBudget returns a subset of the document index that fits within
+// maxItems. When the index exceeds the budget and a projectTitle is available,
+// entries whose path starts with the project name (case-insensitive) are
+// always included, and the remaining slots are filled alphabetically.
+// The second return value is the count of items dropped.
+func scopeIndexForBudget(entries []DocumentIndexEntry, projectTitle string, maxItems int) ([]DocumentIndexEntry, int) {
+	if len(entries) <= maxItems {
+		return entries, 0
+	}
+
+	// Normalize project title to a path prefix heuristic.
+	// e.g. "My Project" → "my-project" or "my project"; we match case-insensitively
+	// against the first path segment.
+	projectPrefix := strings.ToLower(strings.TrimSpace(projectTitle))
+
+	// If no project context, just take the first maxItems (alphabetically sorted from DB).
+	if projectPrefix == "" {
+		return entries[:maxItems], len(entries) - maxItems
+	}
+
+	// Partition into project-scoped and other entries.
+	var projectEntries, otherEntries []DocumentIndexEntry
+	for _, e := range entries {
+		pathLower := strings.ToLower(e.Path)
+		if strings.HasPrefix(pathLower, projectPrefix+"/") || strings.HasPrefix(pathLower, projectPrefix) {
+			projectEntries = append(projectEntries, e)
+		} else {
+			otherEntries = append(otherEntries, e)
+		}
+	}
+
+	// Always include all project entries (they're high-signal).
+	// Fill remaining budget with alphabetically-first other entries.
+	result := make([]DocumentIndexEntry, 0, maxItems)
+	result = append(result, projectEntries...)
+	remaining := maxItems - len(result)
+	if remaining > 0 && len(otherEntries) > 0 {
+		if remaining > len(otherEntries) {
+			remaining = len(otherEntries)
+		}
+		result = append(result, otherEntries[:remaining]...)
+	}
+
+	// Re-sort by path for consistent tree rendering.
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Path < result[j].Path
+	})
+
+	return result, len(entries) - len(result)
+}
+
 // truncateDocsForBudget returns a prefix of docs that fits within maxItems and
 // maxTokens (estimated as len/4). If truncated, the second return value is the
 // count of items dropped.
@@ -436,13 +488,10 @@ func writeKBSections(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("You have access to a workspace knowledge base. The tree below is everything\n")
 		b.WriteString("that exists. Read individual files with `multica doc get <path>`.\n\n")
 		b.WriteString("```\n")
-		index := ctx.DocumentIndex
-		if len(index) > maxIndexEntries {
-			index = index[:maxIndexEntries]
-		}
+		index, dropped := scopeIndexForBudget(ctx.DocumentIndex, ctx.ProjectTitle, maxIndexEntries)
 		b.WriteString(renderIndexTree(index))
-		if len(ctx.DocumentIndex) > maxIndexEntries {
-			fmt.Fprintf(b, "\n... and %d more entries (use `multica doc list` to see all)\n", len(ctx.DocumentIndex)-maxIndexEntries)
+		if dropped > 0 {
+			fmt.Fprintf(b, "\n... and %d more entries (use `multica doc list` to see all)\n", dropped)
 		}
 		b.WriteString("```\n\n")
 	}
