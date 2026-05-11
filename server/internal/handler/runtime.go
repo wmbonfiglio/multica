@@ -27,10 +27,14 @@ type AgentRuntimeResponse struct {
 	DeviceInfo   string  `json:"device_info"`
 	Metadata     any     `json:"metadata"`
 	OwnerID      *string `json:"owner_id"`
-	Timezone     string  `json:"timezone"`
-	LastSeenAt   *string `json:"last_seen_at"`
-	CreatedAt    string  `json:"created_at"`
-	UpdatedAt    string  `json:"updated_at"`
+	// Visibility is "private" (default — only the owner / workspace admins
+	// can bind agents) or "public" (any workspace member can). See migration
+	// 083 and canUseRuntimeForAgent.
+	Visibility string  `json:"visibility"`
+	Timezone   string  `json:"timezone"`
+	LastSeenAt *string `json:"last_seen_at"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
@@ -54,6 +58,7 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 		DeviceInfo:   rt.DeviceInfo,
 		Metadata:     metadata,
 		OwnerID:      uuidToPtr(rt.OwnerID),
+		Visibility:   rt.Visibility,
 		Timezone:     rt.Timezone,
 		LastSeenAt:   timestampToPtr(rt.LastSeenAt),
 		CreatedAt:    timestampToString(rt.CreatedAt),
@@ -437,6 +442,10 @@ type UpdateAgentRuntimeRequest struct {
 	// Timezone is an IANA zone name (e.g. "Asia/Shanghai", "America/New_York").
 	// Validated server-side via time.LoadLocation; "UTC" or empty resets to UTC.
 	Timezone *string `json:"timezone,omitempty"`
+	// Visibility flips a runtime between "private" (default — only the owner
+	// or workspace admins can bind agents) and "public" (any workspace
+	// member can). Owner / workspace admin only, gated by canEditRuntime.
+	Visibility *string `json:"visibility,omitempty"`
 }
 
 // UpdateAgentRuntime handles PATCH /api/runtimes/:id. Currently only the
@@ -532,11 +541,54 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		rt = updated
 	}
 
+	if req.Visibility != nil {
+		v := *req.Visibility
+		if v != "private" && v != "public" {
+			writeError(w, http.StatusBadRequest, "visibility must be 'private' or 'public'")
+			return
+		}
+		if v != rt.Visibility {
+			updated, err := h.Queries.UpdateAgentRuntimeVisibility(r.Context(), db.UpdateAgentRuntimeVisibilityParams{
+				ID:         runtimeUUID,
+				Visibility: v,
+			})
+			if err != nil {
+				slog.Error("UpdateAgentRuntimeVisibility failed", "error", err, "runtime_id", runtimeID)
+				writeError(w, http.StatusInternalServerError, "failed to update runtime")
+				return
+			}
+			rt = updated
+			// Notify connected clients that runtime metadata changed so the
+			// list/detail pages refresh — matches the pattern used by
+			// DeleteAgentRuntime.
+			h.publish(protocol.EventDaemonRegister, uuidToString(rt.WorkspaceID), "member", uuidToString(member.UserID), map[string]any{
+				"action": "update",
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, runtimeToResponse(rt))
 }
 
 func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
 	if roleAllowed(member.Role, "owner", "admin") {
+		return true
+	}
+	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+}
+
+// canUseRuntimeForAgent reports whether a workspace member is allowed to
+// bind a new agent to — or move an existing agent onto — the given runtime.
+// Mirrors canEditRuntime but layers on the runtime's visibility flag so a
+// `public` runtime is usable by anyone in the workspace while a `private`
+// runtime stays bound to its owner. Workspace owners/admins keep an
+// administrative override for both. See migration 083 for the visibility
+// column.
+func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
+	if roleAllowed(member.Role, "owner", "admin") {
+		return true
+	}
+	if rt.Visibility == "public" {
 		return true
 	}
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)

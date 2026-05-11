@@ -85,27 +85,57 @@ export function CreateAgentDialog({
 
   const hasOtherRuntimes = runtimes.some((r) => r.owner_id !== currentUserId);
 
+  // A runtime is disabled for the caller when it's owned by someone else
+  // AND its visibility is not "public". Older backends that haven't shipped
+  // MUL-2062 leave visibility undefined; we treat anything other than the
+  // literal string "public" as private so the strict default holds (the
+  // backend will reject the create anyway).
+  const isRuntimeDisabledForUser = (r: RuntimeDevice): boolean => {
+    if (!currentUserId) return false;
+    if (r.owner_id === currentUserId) return false;
+    return r.visibility !== "public";
+  };
+
   const filteredRuntimes = useMemo(() => {
     const filtered = runtimeFilter === "mine" && currentUserId
       ? runtimes.filter((r) => r.owner_id === currentUserId)
       : runtimes;
     return [...filtered].sort((a, b) => {
-      if (a.owner_id === currentUserId && b.owner_id !== currentUserId) return -1;
-      if (a.owner_id !== currentUserId && b.owner_id === currentUserId) return 1;
+      // Caller's own runtimes first; among the rest, usable (public) ones
+      // come before unusable (private) ones so the picker doesn't lead
+      // with greyed-out rows.
+      const aMine = a.owner_id === currentUserId;
+      const bMine = b.owner_id === currentUserId;
+      if (aMine && !bMine) return -1;
+      if (!aMine && bMine) return 1;
+      const aDisabled = isRuntimeDisabledForUser(a);
+      const bDisabled = isRuntimeDisabledForUser(b);
+      if (!aDisabled && bDisabled) return -1;
+      if (aDisabled && !bDisabled) return 1;
       return 0;
     });
+    // currentUserId is the only external dep of isRuntimeDisabledForUser;
+    // listing it in the deps array is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimes, runtimeFilter, currentUserId]);
 
   // When duplicating, default to the template's runtime so the clone
   // lands on the same machine — caller can still switch in the picker.
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState(
-    template?.runtime_id ?? filteredRuntimes[0]?.id ?? "",
-  );
+  // Don't default to a disabled (other-owned private) runtime; let the
+  // user pick something usable instead.
+  const initialRuntime = template?.runtime_id
+    ? template.runtime_id
+    : filteredRuntimes.find((r) => !isRuntimeDisabledForUser(r))?.id ?? "";
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState(initialRuntime);
 
   useEffect(() => {
-    if (!selectedRuntimeId && filteredRuntimes[0]) {
-      setSelectedRuntimeId(filteredRuntimes[0].id);
+    if (!selectedRuntimeId) {
+      const firstUsable = filteredRuntimes.find(
+        (r) => !isRuntimeDisabledForUser(r),
+      );
+      if (firstUsable) setSelectedRuntimeId(firstUsable.id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredRuntimes, selectedRuntimeId]);
 
   const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
@@ -302,15 +332,33 @@ export function CreateAgentDialog({
               <PopoverContent align="start" className="w-[var(--anchor-width)] p-1 max-h-60 overflow-y-auto">
                 {filteredRuntimes.map((device) => {
                   const ownerMember = getOwnerMember(device.owner_id);
+                  const disabled = isRuntimeDisabledForUser(device);
+                  // Use the native title for the disabled tooltip so we
+                  // don't have to wrap each row in a Tooltip primitive
+                  // inside a Popover (which has its own focus trap and
+                  // close-on-outside-click handling — adding another layer
+                  // makes the Popover dismiss when the tooltip portal
+                  // mounts).
+                  const disabledTitle = disabled
+                    ? t(($) => $.create_dialog.runtime_private_locked_tooltip)
+                    : undefined;
                   return (
                     <button
                       key={device.id}
+                      type="button"
+                      disabled={disabled}
+                      title={disabledTitle}
                       onClick={() => {
+                        if (disabled) return;
                         setSelectedRuntimeId(device.id);
                         setRuntimeOpen(false);
                       }}
                       className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-                        device.id === selectedRuntimeId ? "bg-accent" : "hover:bg-accent/50"
+                        disabled
+                          ? "cursor-not-allowed opacity-50"
+                          : device.id === selectedRuntimeId
+                            ? "bg-accent"
+                            : "hover:bg-accent/50"
                       }`}
                     >
                       <ProviderLogo provider={device.provider} className="h-4 w-4 shrink-0" />
@@ -320,6 +368,12 @@ export function CreateAgentDialog({
                           {device.runtime_mode === "cloud" && (
                             <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
                               {t(($) => $.create_dialog.runtime_cloud_badge)}
+                            </span>
+                          )}
+                          {disabled && (
+                            <span className="shrink-0 inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              <Lock className="h-3 w-3" />
+                              {t(($) => $.create_dialog.runtime_private_badge)}
                             </span>
                           )}
                         </div>
