@@ -201,9 +201,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		// Chat task: interactive assistant mode
 		b.WriteString("**You are in chat mode.** A user is messaging you directly in a chat window.\n\n")
 		b.WriteString("- Respond conversationally and helpfully to the user's message\n")
-		b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
+		b.WriteString("- You have full access to the `multica` CLI to look up and edit issues, workspace info, members, agents, and the workspace knowledge base (KB) documents — not just issues\n")
 		b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
 		b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
+		b.WriteString("- If asked about KB documents (the workspace's structured docs, separate from code) — including reading, listing, searching, creating, or updating one — use the `multica doc` family: `multica doc list --output json`, `multica doc tree`, `multica doc get <path>`, `multica doc search \"<query>\"`. To create or replace a doc use `multica doc put <path> --content-stdin`; for a surgical edit use `multica doc patch <path> --find \"...\" --replace \"...\"`. \"Atualize o documento X\" / \"update doc X\" / similar requests are doc operations — do NOT refuse them as out-of-scope.\n")
 		b.WriteString("- If asked to perform actions (create issues, update status, etc.), use the appropriate CLI commands\n")
 		b.WriteString("- If the task requires code changes, use `multica repo checkout <url>` to get the code first. Use `--ref <branch-or-sha>` when you need an exact revision\n")
 		b.WriteString("- Keep responses concise and direct\n\n")
@@ -264,7 +265,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("5. If a reply IS warranted: do any requested work first, then **decide whether to include any `@mention` link.** The default is NO mention. Only mention when you are escalating to a human owner who is not yet involved, delegating a concrete new sub-task to another agent for the first time, or the user explicitly asked you to loop someone in. Never @mention the agent you are replying to as a thank-you or sign-off.\n")
 		b.WriteString("6. **If you reply, post it as a comment — this step is mandatory when you reply.** Text in your terminal or run logs is NOT delivered to the user. ")
 		b.WriteString(BuildCommentReplyInstructions(provider, ctx.IssueID, ctx.TriggerCommentID))
-		b.WriteString("7. Do NOT change the issue status unless the comment explicitly asks for it\n\n")
+		b.WriteString("7. Do NOT change the issue status unless the comment explicitly asks for it\n")
+		b.WriteString("8. If the comment asks you to read or modify a workspace KB document (e.g. \"atualize o documento X\" / \"check the X runbook\" / \"add a note to Y\"), use the `multica doc` family — `multica doc get <path>` to read, `multica doc put <path> --content-stdin` to create/replace, `multica doc patch <path> --find ... --replace ...` to edit surgically. KB docs are a first-class capability, not out-of-scope.\n\n")
 	} else {
 		// Assignment-triggered: defer to agent Skills for workflow specifics.
 		b.WriteString("You are responsible for managing the issue status throughout your work.\n\n")
@@ -278,7 +280,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			fmt.Fprintf(&b, "5. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
 		}
 		fmt.Fprintf(&b, "6. When done, run `multica issue status %s in_review`\n", ctx.IssueID)
-		fmt.Fprintf(&b, "7. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n\n", ctx.IssueID)
+		fmt.Fprintf(&b, "7. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n", ctx.IssueID)
+		b.WriteString("8. KB documents are a first-class capability. If the issue (or a comment on it) asks you to read, create, or update a workspace KB document (\"atualize o documento X\", \"add a runbook for Y\", \"check the Z spec\"), use the `multica doc` family: `multica doc get <path>` (read), `multica doc put <path> --content-stdin` (create/replace), `multica doc patch <path> --find ... --replace ...` (surgical edit). When your work produces lasting knowledge worth keeping (architecture decisions, debugging notes, runbooks), capture it via the same commands and optionally link with `multica doc link <issue-id> <path>`. Skip when nothing of lasting value was produced.\n\n")
 	}
 
 	if len(ctx.AgentSkills) > 0 {
