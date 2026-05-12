@@ -29,7 +29,7 @@
     "toast_failed": "发送反馈失败",
     "send": "发送反馈",
     "sending": "发送中...",
-    "github_hint_prefix": "想要更快的，请去 ",
+    "github_hint_prefix": "想被更快处理、参与讨论？请去 ",
     "github_hint_link": "GitHub"
   },
   "issue_picker": {
