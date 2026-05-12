@@ -156,7 +156,18 @@ func (s *DocumentService) Put(
 		return &doc, nil
 	}
 
-	// Existing document — check for conflict.
+	// Existing document — lock the row before the conflict check, so concurrent
+	// edits serialize. Without FOR UPDATE the optimistic check at the
+	// next line can pass for two writers reading the same base_revision_id;
+	// they then both compute next revision_number from a stale MAX and
+	// collide on the UNIQUE constraint.
+	locked, err := qtx.GetWorkspaceDocumentByIDForUpdate(ctx, existing.ID)
+	if err != nil {
+		return nil, fmt.Errorf("lock document: %w", err)
+	}
+	existing = locked
+
+	// Conflict check uses the locked row.
 	if baseRevisionID != nil && baseRevisionID.Valid && existing.CurrentRevisionID.Valid {
 		if *baseRevisionID != existing.CurrentRevisionID {
 			return nil, ErrDocumentConflict
@@ -182,11 +193,14 @@ func (s *DocumentService) Put(
 
 	if canCollapse {
 		// Update the existing revision instead of creating a new one.
-		_, err = tx.Exec(ctx, `
-			UPDATE workspace_document_revision
-			SET content = $2, title = $3, description = $4, tags = $5, change_summary = $6, created_at = now()
-			WHERE id = $1
-		`, existing.CurrentRevisionID, payload.Content, title, desc, tags, util.StrToText(changeSummary))
+		err = qtx.UpdateWorkspaceDocumentRevisionContent(ctx, db.UpdateWorkspaceDocumentRevisionContentParams{
+			ID:            existing.CurrentRevisionID,
+			Content:       payload.Content,
+			Title:         title,
+			Description:   desc,
+			Tags:          tags,
+			ChangeSummary: util.StrToText(changeSummary),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("collapse revision: %w", err)
 		}
@@ -290,7 +304,10 @@ func (s *DocumentService) Patch(
 
 	qtx := s.Queries.WithTx(tx)
 
-	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	// Row-lock the document up-front so concurrent mutations serialize and
+	// the GetMaxRevisionNumber + InsertRevision pair can't collide on the
+	// UNIQUE(document_id, revision_number) constraint.
+	doc, err := qtx.GetWorkspaceDocumentByIDForUpdate(ctx, documentID)
 	if err != nil {
 		return nil, fmt.Errorf("get document: %w", err)
 	}
@@ -360,7 +377,10 @@ func (s *DocumentService) Restore(
 
 	qtx := s.Queries.WithTx(tx)
 
-	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	// Row-lock the document up-front so concurrent mutations serialize and
+	// the GetMaxRevisionNumber + InsertRevision pair can't collide on the
+	// UNIQUE(document_id, revision_number) constraint.
+	doc, err := qtx.GetWorkspaceDocumentByIDForUpdate(ctx, documentID)
 	if err != nil {
 		return nil, fmt.Errorf("get document: %w", err)
 	}
@@ -436,7 +456,10 @@ func (s *DocumentService) UpdateTags(
 
 	qtx := s.Queries.WithTx(tx)
 
-	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	// Row-lock the document up-front so concurrent mutations serialize and
+	// the GetMaxRevisionNumber + InsertRevision pair can't collide on the
+	// UNIQUE(document_id, revision_number) constraint.
+	doc, err := qtx.GetWorkspaceDocumentByIDForUpdate(ctx, documentID)
 	if err != nil {
 		return nil, fmt.Errorf("get document: %w", err)
 	}
@@ -518,7 +541,10 @@ func (s *DocumentService) SetPinned(
 
 	qtx := s.Queries.WithTx(tx)
 
-	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	// Row-lock the document up-front so concurrent mutations serialize and
+	// the GetMaxRevisionNumber + InsertRevision pair can't collide on the
+	// UNIQUE(document_id, revision_number) constraint.
+	doc, err := qtx.GetWorkspaceDocumentByIDForUpdate(ctx, documentID)
 	if err != nil {
 		return nil, fmt.Errorf("get document: %w", err)
 	}
@@ -595,7 +621,10 @@ func (s *DocumentService) Archive(
 
 	qtx := s.Queries.WithTx(tx)
 
-	doc, err := qtx.GetWorkspaceDocumentByID(ctx, documentID)
+	// Row-lock the document up-front so concurrent mutations serialize and
+	// the GetMaxRevisionNumber + InsertRevision pair can't collide on the
+	// UNIQUE(document_id, revision_number) constraint.
+	doc, err := qtx.GetWorkspaceDocumentByIDForUpdate(ctx, documentID)
 	if err != nil {
 		return fmt.Errorf("get document: %w", err)
 	}

@@ -12,6 +12,12 @@ WHERE workspace_id = $1 AND path = $2 AND archived_at IS NULL;
 -- name: GetWorkspaceDocumentByID :one
 SELECT * FROM workspace_document WHERE id = $1;
 
+-- name: GetWorkspaceDocumentByIDForUpdate :one
+-- Row lock acquired up-front in every mutation transaction so concurrent
+-- writers can't both read the same MAX(revision_number) and collide on
+-- the UNIQUE(document_id, revision_number) constraint.
+SELECT * FROM workspace_document WHERE id = $1 FOR UPDATE;
+
 -- name: ListWorkspaceDocuments :many
 SELECT * FROM workspace_document
 WHERE workspace_id = $1
@@ -78,3 +84,16 @@ WHERE document_id = $1 AND revision_number = $2;
 -- name: GetMaxRevisionNumber :one
 SELECT COALESCE(MAX(revision_number), 0)::int FROM workspace_document_revision
 WHERE document_id = $1;
+
+-- name: UpdateWorkspaceDocumentRevisionContent :exec
+-- Collapse a recent revision in-place (within the collapseRevisionWindow).
+-- Author/operation/parent are preserved; created_at is bumped so the row
+-- reflects the latest save and the collapse window is anchored to "now".
+UPDATE workspace_document_revision
+SET content = $2,
+    title = $3,
+    description = $4,
+    tags = $5,
+    change_summary = $6,
+    created_at = now()
+WHERE id = $1;

@@ -108,6 +108,35 @@ func (q *Queries) GetWorkspaceDocumentByID(ctx context.Context, id pgtype.UUID) 
 	return i, err
 }
 
+const getWorkspaceDocumentByIDForUpdate = `-- name: GetWorkspaceDocumentByIDForUpdate :one
+SELECT id, workspace_id, path, title, description, content, format, tags, pinned, archived_at, current_revision_id, created_by, created_at, updated_at FROM workspace_document WHERE id = $1 FOR UPDATE
+`
+
+// Row lock acquired up-front in every mutation transaction so concurrent
+// writers can't both read the same MAX(revision_number) and collide on
+// the UNIQUE(document_id, revision_number) constraint.
+func (q *Queries) GetWorkspaceDocumentByIDForUpdate(ctx context.Context, id pgtype.UUID) (WorkspaceDocument, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceDocumentByIDForUpdate, id)
+	var i WorkspaceDocument
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Path,
+		&i.Title,
+		&i.Description,
+		&i.Content,
+		&i.Format,
+		&i.Tags,
+		&i.Pinned,
+		&i.ArchivedAt,
+		&i.CurrentRevisionID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceDocumentByPath = `-- name: GetWorkspaceDocumentByPath :one
 SELECT id, workspace_id, path, title, description, content, format, tags, pinned, archived_at, current_revision_id, created_by, created_at, updated_at FROM workspace_document
 WHERE workspace_id = $1 AND path = $2 AND archived_at IS NULL
@@ -514,6 +543,41 @@ func (q *Queries) UpdateWorkspaceDocumentContent(ctx context.Context, arg Update
 		arg.Description,
 		arg.Tags,
 		arg.CurrentRevisionID,
+	)
+	return err
+}
+
+const updateWorkspaceDocumentRevisionContent = `-- name: UpdateWorkspaceDocumentRevisionContent :exec
+UPDATE workspace_document_revision
+SET content = $2,
+    title = $3,
+    description = $4,
+    tags = $5,
+    change_summary = $6,
+    created_at = now()
+WHERE id = $1
+`
+
+type UpdateWorkspaceDocumentRevisionContentParams struct {
+	ID            pgtype.UUID `json:"id"`
+	Content       string      `json:"content"`
+	Title         pgtype.Text `json:"title"`
+	Description   pgtype.Text `json:"description"`
+	Tags          []string    `json:"tags"`
+	ChangeSummary pgtype.Text `json:"change_summary"`
+}
+
+// Collapse a recent revision in-place (within the collapseRevisionWindow).
+// Author/operation/parent are preserved; created_at is bumped so the row
+// reflects the latest save and the collapse window is anchored to "now".
+func (q *Queries) UpdateWorkspaceDocumentRevisionContent(ctx context.Context, arg UpdateWorkspaceDocumentRevisionContentParams) error {
+	_, err := q.db.Exec(ctx, updateWorkspaceDocumentRevisionContent,
+		arg.ID,
+		arg.Content,
+		arg.Title,
+		arg.Description,
+		arg.Tags,
+		arg.ChangeSummary,
 	)
 	return err
 }
