@@ -168,17 +168,13 @@ func renderMemberRow(ctx context.Context, q *db.Queries, m db.SquadMember) strin
 		}
 		return formatRosterRow(ag.Name, "agent", role, formatMention(ag.Name, "agent", id))
 	case "member":
-		mem, err := q.GetMember(ctx, m.MemberID)
-		if err != nil {
-			return ""
-		}
-		user, err := q.GetUser(ctx, mem.UserID)
+		user, err := q.GetUser(ctx, m.MemberID)
 		if err != nil {
 			return ""
 		}
 		// Mention syntax for humans uses the user_id (matches the rest of
 		// the product — see util.MentionRe and frontend mention payloads).
-		userID := util.UUIDToString(mem.UserID)
+		userID := util.UUIDToString(m.MemberID)
 		return formatRosterRow(user.Name, "member (human)", role, formatMention(user.Name, "member", userID))
 	default:
 		return ""

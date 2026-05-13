@@ -54,12 +54,12 @@ func addAgentMember(t *testing.T, squadID pgtype.UUID, agentID, role string) {
 	}
 }
 
-func addHumanMember(t *testing.T, squadID pgtype.UUID, memberRowID, role string) {
+func addHumanMember(t *testing.T, squadID pgtype.UUID, userID, role string) {
 	t.Helper()
 	if _, err := testHandler.Queries.AddSquadMember(context.Background(), db.AddSquadMemberParams{
 		SquadID:    squadID,
 		MemberType: "member",
-		MemberID:   util.MustParseUUID(memberRowID),
+		MemberID:   util.MustParseUUID(userID),
 		Role:       role,
 	}); err != nil {
 		t.Fatalf("add human member: %v", err)
@@ -103,7 +103,8 @@ func TestBuildSquadLeaderBriefing_FullSquad(t *testing.T) {
 	addAgentMember(t, squad.ID, helper2, "")
 
 	memberRowID, userID, userName := seededHumanMember(t)
-	addHumanMember(t, squad.ID, memberRowID, "reviewer")
+	_ = memberRowID
+	addHumanMember(t, squad.ID, userID, "reviewer")
 
 	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
 
@@ -182,7 +183,8 @@ func TestBuildSquadLeaderBriefing_MentionsRoundTrip(t *testing.T) {
 	addAgentMember(t, squad.ID, helper, "")
 
 	memberRowID, userID, _ := seededHumanMember(t)
-	addHumanMember(t, squad.ID, memberRowID, "")
+	_ = memberRowID
+	addHumanMember(t, squad.ID, userID, "")
 
 	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
 	mentions := util.ParseMentions(out)

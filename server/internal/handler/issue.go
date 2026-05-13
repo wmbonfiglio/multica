@@ -1646,11 +1646,15 @@ func (h *Handler) validateAssigneePair(ctx context.Context, r *http.Request, wor
 		}
 		return 0, ""
 	case "squad":
-		if _, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+		squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 			ID:          assigneeID,
 			WorkspaceID: wsUUID,
-		}); err != nil {
+		})
+		if err != nil {
 			return http.StatusBadRequest, "assignee_id does not refer to a squad in this workspace"
+		}
+		if squad.ArchivedAt.Valid {
+			return http.StatusBadRequest, "cannot assign to an archived squad"
 		}
 		return 0, ""
 	default:

@@ -134,6 +134,10 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
       },
+      squad: () => {
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: workspaceKeys.squads(wsId) });
+      },
       label: () => {
         // label:created/updated/deleted — also refresh issues, since each
         // issue carries a denormalized snapshot of its labels (rename/recolor
