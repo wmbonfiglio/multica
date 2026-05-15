@@ -1198,7 +1198,15 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 //
 // failureReason is a coarse classifier consumed by the auto-retry path.
 // Pass "" when unknown (treated as 'agent_error').
-func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason, claimToken string) (*db.AgentTaskQueue, error) {
+	var claimTokenUUID pgtype.UUID
+	if claimToken != "" {
+		parsed, err := util.ParseUUID(claimToken)
+		if err == nil {
+			claimTokenUUID = parsed
+		}
+	}
+
 	var task db.AgentTaskQueue
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		t, err := qtx.FailAgentTask(ctx, db.FailAgentTaskParams{
@@ -1207,6 +1215,7 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 			FailureReason: pgtype.Text{String: failureReason, Valid: failureReason != ""},
 			SessionID:     pgtype.Text{String: sessionID, Valid: sessionID != ""},
 			WorkDir:       pgtype.Text{String: workDir, Valid: workDir != ""},
+			ClaimToken:    claimTokenUUID,
 		})
 		if err != nil {
 			return err

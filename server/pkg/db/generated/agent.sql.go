@@ -1072,6 +1072,7 @@ SET status = 'failed',
     session_id = COALESCE($4, session_id),
     work_dir = COALESCE($5, work_dir)
 WHERE id = $1 AND status IN ('dispatched', 'running')
+  AND ($6::uuid IS NULL OR claim_token = $6)
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, claim_token, claim_expires_at
 `
 
@@ -1081,6 +1082,7 @@ type FailAgentTaskParams struct {
 	FailureReason pgtype.Text `json:"failure_reason"`
 	SessionID     pgtype.Text `json:"session_id"`
 	WorkDir       pgtype.Text `json:"work_dir"`
+	ClaimToken    pgtype.UUID `json:"claim_token"`
 }
 
 // Marks a task as failed. session_id and work_dir are merged via COALESCE so
@@ -1092,6 +1094,10 @@ type FailAgentTaskParams struct {
 //
 // failure_reason is a coarse classifier consumed by the auto-retry path;
 // 'agent_error' is the safe default when the daemon doesn't supply one.
+//
+// claim_token guards against stale daemons: when provided, only the daemon
+// holding the current lease can fail the task. A stale daemon whose token
+// was superseded by a requeue+re-claim will get no rows back.
 func (q *Queries) FailAgentTask(ctx context.Context, arg FailAgentTaskParams) (AgentTaskQueue, error) {
 	row := q.db.QueryRow(ctx, failAgentTask,
 		arg.ID,
@@ -1099,6 +1105,7 @@ func (q *Queries) FailAgentTask(ctx context.Context, arg FailAgentTaskParams) (A
 		arg.FailureReason,
 		arg.SessionID,
 		arg.WorkDir,
+		arg.ClaimToken,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(

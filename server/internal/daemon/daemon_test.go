@@ -1423,7 +1423,7 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 		BranchName: "agent/foo",
 		SessionID:  "ses-1",
 		WorkDir:    "/tmp/foo",
-	}, slog.Default())
+	}, "", slog.Default())
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -1494,7 +1494,7 @@ func TestReportTaskResult_NonCompletedHitsFailEndpoint(t *testing.T) {
 				SessionID:     "ses-x",
 				WorkDir:       "/tmp/x",
 				FailureReason: tc.failureReasonIn,
-			}, slog.Default())
+			}, "", slog.Default())
 
 			rec.mu.Lock()
 			defer rec.mu.Unlock()
