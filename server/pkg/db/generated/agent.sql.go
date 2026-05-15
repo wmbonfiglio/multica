@@ -1072,7 +1072,10 @@ SET status = 'failed',
     session_id = COALESCE($4, session_id),
     work_dir = COALESCE($5, work_dir)
 WHERE id = $1 AND status IN ('dispatched', 'running')
-  AND ($6::uuid IS NULL OR claim_token = $6)
+  AND (
+    ($6::uuid IS NULL AND claim_token IS NULL)
+    OR claim_token = $6
+  )
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, claim_token, claim_expires_at
 `
 
@@ -1098,6 +1101,8 @@ type FailAgentTaskParams struct {
 // claim_token guards against stale daemons: when provided, only the daemon
 // holding the current lease can fail the task. A stale daemon whose token
 // was superseded by a requeue+re-claim will get no rows back.
+// When no token is supplied (NULL), only legacy rows (claim_token IS NULL)
+// can be failed — this prevents tokenless requests from failing tokened rows.
 func (q *Queries) FailAgentTask(ctx context.Context, arg FailAgentTaskParams) (AgentTaskQueue, error) {
 	row := q.db.QueryRow(ctx, failAgentTask,
 		arg.ID,
@@ -2144,13 +2149,15 @@ func (q *Queries) RefreshAgentStatusFromTasks(ctx context.Context, id pgtype.UUI
 
 const requeueExpiredClaimLeases = `-- name: RequeueExpiredClaimLeases :many
 WITH expired AS (
-    SELECT id FROM agent_task_queue
-    WHERE status = 'dispatched'
-      AND claim_expires_at IS NOT NULL
-      AND claim_expires_at < now()
-    ORDER BY claim_expires_at ASC
+    SELECT atq.id FROM agent_task_queue atq
+    INNER JOIN agent_runtime ar ON ar.id = atq.runtime_id
+    WHERE atq.status = 'dispatched'
+      AND atq.claim_expires_at IS NOT NULL
+      AND atq.claim_expires_at < now()
+      AND ar.status = 'online'
+    ORDER BY atq.claim_expires_at ASC
     LIMIT $1::int
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF atq SKIP LOCKED
 )
 UPDATE agent_task_queue t
 SET status = 'queued',
@@ -2166,10 +2173,12 @@ RETURNING t.id, t.agent_id, t.issue_id, t.status, t.priority, t.dispatched_at, t
 `
 
 // Moves dispatched tasks whose claim lease has expired back to 'queued' so
-// they can be re-claimed. This handles the case where the server committed
-// the claim but the response never reached the daemon (network timeout,
-// daemon crash, etc.). Capped via LIMIT inside the CTE to bound per-tick
-// work. Uses FOR UPDATE SKIP LOCKED to avoid contention with concurrent
+// they can be re-claimed. Only requeues tasks whose runtime is still online;
+// tasks on offline/dead runtimes stay dispatched so
+// FailTasksForOfflineRuntimes can properly fail+retry them (avoids the
+// 2-hour gap where a requeued task sits in 'queued' but no runtime will
+// claim it). Capped via LIMIT inside the CTE to bound per-tick work.
+// Uses FOR UPDATE SKIP LOCKED to avoid contention with concurrent
 // claim/start operations.
 func (q *Queries) RequeueExpiredClaimLeases(ctx context.Context, maxPerTick int32) ([]AgentTaskQueue, error) {
 	rows, err := q.db.Query(ctx, requeueExpiredClaimLeases, maxPerTick)

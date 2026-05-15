@@ -61,6 +61,10 @@ const claimLeaseSeconds = 60.0
 // and re-claimed by another runtime).
 var ErrClaimTokenInvalid = errors.New("claim token expired or superseded")
 
+// ErrInvalidClaimToken is returned when a malformed (non-UUID) claim_token is
+// supplied. The caller should surface this as a 400 Bad Request.
+var ErrInvalidClaimToken = errors.New("malformed claim token")
+
 // requeueMaxPerTick caps how many expired-lease rows a single sweeper tick
 // requeues back to 'queued'. Keeps the sweep transaction short.
 const RequeueMaxPerTick = 50
@@ -1202,9 +1206,10 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	var claimTokenUUID pgtype.UUID
 	if claimToken != "" {
 		parsed, err := util.ParseUUID(claimToken)
-		if err == nil {
-			claimTokenUUID = parsed
+		if err != nil {
+			return nil, ErrInvalidClaimToken
 		}
+		claimTokenUUID = parsed
 	}
 
 	var task db.AgentTaskQueue
@@ -1244,6 +1249,10 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	}); err != nil {
 		if existing, lookupErr := s.Queries.GetAgentTask(ctx, taskID); lookupErr == nil {
 			if errors.Is(err, pgx.ErrNoRows) {
+				// If the task is still active, the token didn't match — reject.
+				if existing.Status == "dispatched" || existing.Status == "running" {
+					return nil, ErrClaimTokenInvalid
+				}
 				slog.Info("fail task: already finalized",
 					"task_id", util.UUIDToString(taskID),
 					"current_status", existing.Status,

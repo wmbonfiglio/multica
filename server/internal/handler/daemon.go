@@ -1726,6 +1726,14 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 
 	task, err := h.TaskService.FailTask(r.Context(), parseUUID(taskID), req.Error, req.SessionID, req.WorkDir, req.FailureReason, req.ClaimToken)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidClaimToken) {
+			writeError(w, http.StatusBadRequest, "malformed claim token")
+			return
+		}
+		if errors.Is(err, service.ErrClaimTokenInvalid) {
+			writeError(w, http.StatusConflict, "claim token expired or superseded")
+			return
+		}
 		slog.Warn("fail task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

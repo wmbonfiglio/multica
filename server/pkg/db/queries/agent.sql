@@ -295,6 +295,8 @@ LIMIT 1;
 -- claim_token guards against stale daemons: when provided, only the daemon
 -- holding the current lease can fail the task. A stale daemon whose token
 -- was superseded by a requeue+re-claim will get no rows back.
+-- When no token is supplied (NULL), only legacy rows (claim_token IS NULL)
+-- can be failed — this prevents tokenless requests from failing tokened rows.
 UPDATE agent_task_queue
 SET status = 'failed',
     completed_at = now(),
@@ -303,7 +305,10 @@ SET status = 'failed',
     session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir = COALESCE(sqlc.narg('work_dir'), work_dir)
 WHERE id = $1 AND status IN ('dispatched', 'running')
-  AND (sqlc.narg('claim_token')::uuid IS NULL OR claim_token = sqlc.narg('claim_token'))
+  AND (
+    (sqlc.narg('claim_token')::uuid IS NULL AND claim_token IS NULL)
+    OR claim_token = sqlc.narg('claim_token')
+  )
 RETURNING *;
 
 -- name: UpdateAgentTaskSession :exec
@@ -610,19 +615,23 @@ LIMIT 1;
 
 -- name: RequeueExpiredClaimLeases :many
 -- Moves dispatched tasks whose claim lease has expired back to 'queued' so
--- they can be re-claimed. This handles the case where the server committed
--- the claim but the response never reached the daemon (network timeout,
--- daemon crash, etc.). Capped via LIMIT inside the CTE to bound per-tick
--- work. Uses FOR UPDATE SKIP LOCKED to avoid contention with concurrent
+-- they can be re-claimed. Only requeues tasks whose runtime is still online;
+-- tasks on offline/dead runtimes stay dispatched so
+-- FailTasksForOfflineRuntimes can properly fail+retry them (avoids the
+-- 2-hour gap where a requeued task sits in 'queued' but no runtime will
+-- claim it). Capped via LIMIT inside the CTE to bound per-tick work.
+-- Uses FOR UPDATE SKIP LOCKED to avoid contention with concurrent
 -- claim/start operations.
 WITH expired AS (
-    SELECT id FROM agent_task_queue
-    WHERE status = 'dispatched'
-      AND claim_expires_at IS NOT NULL
-      AND claim_expires_at < now()
-    ORDER BY claim_expires_at ASC
+    SELECT atq.id FROM agent_task_queue atq
+    INNER JOIN agent_runtime ar ON ar.id = atq.runtime_id
+    WHERE atq.status = 'dispatched'
+      AND atq.claim_expires_at IS NOT NULL
+      AND atq.claim_expires_at < now()
+      AND ar.status = 'online'
+    ORDER BY atq.claim_expires_at ASC
     LIMIT @max_per_tick::int
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF atq SKIP LOCKED
 )
 UPDATE agent_task_queue t
 SET status = 'queued',
