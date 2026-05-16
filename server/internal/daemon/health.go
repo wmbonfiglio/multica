@@ -112,12 +112,35 @@ func (d *Daemon) shutdownHandler() http.HandlerFunc {
 	}
 }
 
+// workspaceSyncHandler reloads daemon credentials from disk and immediately
+// syncs workspace registrations. The local installer uses this when an Add
+// Computer one-liner is run while the same-profile daemon is already running.
+func (d *Daemon) workspaceSyncHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := d.resolveAuth(); err != nil {
+			http.Error(w, "reload auth: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := d.syncWorkspacesFromAPI(r.Context()); err != nil {
+			http.Error(w, "sync workspaces: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "synced"})
+	}
+}
+
 // serveHealth runs the health HTTP server on the given listener.
 // Blocks until ctx is cancelled.
 func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt time.Time) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
+	mux.HandleFunc("/workspaces/sync", d.workspaceSyncHandler())
 
 	mux.HandleFunc("/repo/checkout", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

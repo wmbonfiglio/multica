@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 )
 
@@ -130,6 +132,91 @@ func TestShutdownHandlerRejectsNonPost(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	if cancelled {
 		t.Fatal("GET request should not trigger cancellation")
+	}
+}
+
+func TestWorkspaceSyncHandlerReloadsCredentialsAndRegistersNewWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(stubAgentVersion(t))
+
+	const daemonID = "daemon-sync-test"
+	const workspaceID = "ws-new"
+	const daemonToken = "mdt_new_workspace"
+	var registerCalls int32
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/register" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&registerCalls, 1)
+		if got := r.Header.Get("Authorization"); got != "Bearer "+daemonToken {
+			t.Errorf("Authorization = %q, want bearer daemon token", got)
+			http.Error(w, "bad auth", http.StatusUnauthorized)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode register request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if body["workspace_id"] != workspaceID {
+			t.Errorf("workspace_id = %v, want %s", body["workspace_id"], workspaceID)
+			http.Error(w, "bad workspace", http.StatusBadRequest)
+			return
+		}
+		if body["daemon_id"] != daemonID {
+			t.Errorf("daemon_id = %v, want %s", body["daemon_id"], daemonID)
+			http.Error(w, "bad daemon", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(RegisterResponse{
+			Runtimes:     []Runtime{{ID: "rt-new", Name: "Claude", Provider: "claude", Status: "online"}},
+			ReposVersion: "v1",
+		})
+	}))
+	t.Cleanup(api.Close)
+
+	if err := cli.SaveDaemonCredentials(cli.DaemonCredentialStore{
+		Version: 1,
+		Credentials: []cli.DaemonCredential{{
+			ServerURL:   api.URL,
+			WorkspaceID: workspaceID,
+			DaemonID:    daemonID,
+			DaemonToken: daemonToken,
+			IssuedAt:    time.Now().UTC().Format(time.RFC3339),
+		}},
+	}, ""); err != nil {
+		t.Fatalf("save daemon credentials: %v", err)
+	}
+
+	d := New(Config{
+		ServerBaseURL:  api.URL,
+		DaemonID:       daemonID,
+		DeviceName:     "dev",
+		CLIVersion:     "test",
+		Agents:         map[string]AgentEntry{"claude": {Path: "claude"}},
+		WorkspacesRoot: t.TempDir(),
+	}, slog.Default())
+
+	rec := httptest.NewRecorder()
+	d.workspaceSyncHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/workspaces/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync handler: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt32(&registerCalls); got != 1 {
+		t.Fatalf("register calls = %d, want 1", got)
+	}
+	if got := d.tokenForCtx(WithCallWorkspaceID(context.Background(), workspaceID)); got != daemonToken {
+		t.Fatalf("workspace token = %q, want saved daemon token", got)
+	}
+	d.mu.Lock()
+	ws := d.workspaces[workspaceID]
+	d.mu.Unlock()
+	if ws == nil || len(ws.runtimeIDs) != 1 || ws.runtimeIDs[0] != "rt-new" {
+		t.Fatalf("workspace state = %#v, want registered runtime rt-new", ws)
 	}
 }
 

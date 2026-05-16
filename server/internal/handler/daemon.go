@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/daemonws"
@@ -341,10 +340,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "workspace not found")
 			return
 		}
-		if info, err := h.Queries.GetActiveDaemonTokenInstall(r.Context(), db.GetActiveDaemonTokenInstallParams{
-			WorkspaceID: wsUUID,
-			DaemonID:    req.DaemonID,
-		}); err == nil {
+		if tokenHash := middleware.DaemonTokenHashFromContext(r.Context()); tokenHash != "" {
+			info, err := h.Queries.GetDaemonTokenByHash(r.Context(), tokenHash)
+			if err != nil {
+				slog.Warn("daemon register: exact daemon token lookup failed", "error", err, "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID)
+				writeError(w, http.StatusUnauthorized, "invalid daemon token")
+				return
+			}
+			if uuidToString(info.WorkspaceID) != req.WorkspaceID || info.DaemonID != req.DaemonID {
+				writeError(w, http.StatusNotFound, "workspace not found")
+				return
+			}
 			if info.CreatedByUserID.Valid {
 				ownerID = info.CreatedByUserID
 				daemonTokenMember = db.Member{
@@ -370,12 +376,9 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 				// other path mints mdt_ today.
 				installSource = "script"
 			}
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Warn("daemon register: lookup install provenance failed", "error", err, "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID)
 		}
-		// If the lookup returns no rows, ownerID stays zero — COALESCE keeps
-		// any existing owner on upsert. This matches the prior behaviour for
-		// legacy mdt_ rows minted before this PR.
+		// Tests that inject only WithDaemonContext do not have a bearer token
+		// hash. Production DaemonAuth always provides one for mdt_ requests.
 	} else {
 		member, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found")
 		if !ok {

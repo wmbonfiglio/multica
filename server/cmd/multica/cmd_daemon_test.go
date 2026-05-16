@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,14 +14,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestRunDaemonStart_WithInstallTokenAlreadyRunningDoesNotExchange(t *testing.T) {
+func TestRunDaemonStart_WithInstallTokenAlreadyRunningRedeemsAndSyncs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	profile := fmt.Sprintf("already-running-%d", time.Now().UnixNano())
-	startRunningDaemonHealth(t, profile)
+	var syncCalls int32
+	startRunningDaemonHealth(t, profile, func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&syncCalls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"synced"}`))
+	})
 
 	var exchangeCalls int32
 	exchangeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/install-tokens/exchange" {
 			atomic.AddInt32(&exchangeCalls, 1)
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode exchange request: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			if body["token"] != "mit_test_already_running" {
+				t.Errorf("exchange token = %q", body["token"])
+				http.Error(w, "bad token", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"daemon_token": "mdt_saved",
+				"workspace_id": "ws-new",
+				"daemon_id":    body["daemon_id"],
+				"expires_at":   time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+			return
 		}
 		http.Error(w, "exchange should not be called", http.StatusInternalServerError)
 	}))
@@ -34,17 +58,14 @@ func TestRunDaemonStart_WithInstallTokenAlreadyRunningDoesNotExchange(t *testing
 	mustSetFlag(t, cmd, "install-token", "mit_test_already_running")
 
 	err := runDaemonStart(cmd, nil)
-	if err == nil {
-		t.Fatal("runDaemonStart returned nil, want already-running error")
+	if err != nil {
+		t.Fatalf("runDaemonStart returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "already running") {
-		t.Fatalf("runDaemonStart error = %q, want already-running error", err)
+	if got := atomic.LoadInt32(&exchangeCalls); got != 1 {
+		t.Fatalf("exchange calls = %d, want 1", got)
 	}
-	if !strings.Contains(err.Error(), "not redeemed") {
-		t.Fatalf("runDaemonStart error = %q, want token-not-redeemed hint", err)
-	}
-	if got := atomic.LoadInt32(&exchangeCalls); got != 0 {
-		t.Fatalf("exchange calls = %d, want 0", got)
+	if got := atomic.LoadInt32(&syncCalls); got != 1 {
+		t.Fatalf("sync calls = %d, want 1", got)
 	}
 }
 
@@ -75,7 +96,7 @@ func mustSetFlag(t *testing.T, cmd *cobra.Command, name, value string) {
 	}
 }
 
-func startRunningDaemonHealth(t *testing.T, profile string) {
+func startRunningDaemonHealth(t *testing.T, profile string, sync http.HandlerFunc) {
 	t.Helper()
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", healthPortForProfile(profile)))
 	if err != nil {
@@ -89,6 +110,9 @@ func startRunningDaemonHealth(t *testing.T, profile string) {
 			"pid":    12345,
 		})
 	})
+	if sync != nil {
+		mux.HandleFunc("/workspaces/sync", sync)
+	}
 	srv := &http.Server{Handler: mux}
 	done := make(chan struct{})
 	go func() {

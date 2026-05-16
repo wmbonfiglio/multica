@@ -147,31 +147,34 @@ func TestInstallTokenNonAdminCannotTakeOverExistingDaemonID(t *testing.T) {
 		t.Fatalf("expected no attacker daemon token, got %d", daemonTokenCount)
 	}
 
-	tokenHash := "takeover-mdt-" + uuid.NewString()
+	attackerOldTokenHash := "takeover-mdt-old-" + uuid.NewString()
+	victimNewerTokenHash := "takeover-mdt-newer-" + uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO daemon_token (
 			token_hash, workspace_id, daemon_id, expires_at,
-			created_by_user_id, install_source
+			created_by_user_id, install_source, created_at
 		)
-		VALUES ($1, $2, $3, now() + interval '1 hour', $4, 'script')
-	`, tokenHash, testWorkspaceID, daemonID, attackerID); err != nil {
-		t.Fatalf("seed attacker daemon token: %v", err)
+		VALUES
+			($1, $3, $4, now() + interval '1 hour', $5, 'script', now() - interval '2 minutes'),
+			($2, $3, $4, now() + interval '1 hour', $6, 'script', now())
+	`, attackerOldTokenHash, victimNewerTokenHash, testWorkspaceID, daemonID, attackerID, ownerID); err != nil {
+		t.Fatalf("seed daemon tokens: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE token_hash = $1`, tokenHash)
+		testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE token_hash = ANY($1::text[])`, []string{attackerOldTokenHash, victimNewerTokenHash})
 	})
 
 	registerW := httptest.NewRecorder()
-	testHandler.DaemonRegister(registerW, newDaemonTokenRequest(http.MethodPost, "/api/daemon/register", map[string]any{
+	testHandler.DaemonRegister(registerW, newDaemonTokenRequestWithHash(http.MethodPost, "/api/daemon/register", map[string]any{
 		"workspace_id": testWorkspaceID,
 		"daemon_id":    daemonID,
 		"device_name":  "attacker-machine",
 		"runtimes": []map[string]any{
 			{"name": "attacker-runtime", "type": provider, "version": "1.0.0", "status": "online"},
 		},
-	}, testWorkspaceID, daemonID))
+	}, testWorkspaceID, daemonID, attackerOldTokenHash))
 	if registerW.Code != http.StatusForbidden {
-		t.Fatalf("DaemonRegister takeover: expected 403, got %d: %s", registerW.Code, registerW.Body.String())
+		t.Fatalf("DaemonRegister with attacker old token and victim newer token: expected 403, got %d: %s", registerW.Code, registerW.Body.String())
 	}
 
 	var runtimeIDAfter, ownerIDAfter string

@@ -26,12 +26,13 @@ func TestDaemonAuth_DaemonTokenCacheHit(t *testing.T) {
 		DaemonID:    "daemon-cached",
 	}, auth.AuthCacheTTL)
 
-	var gotWS, gotDaemon, gotPath string
+	var gotWS, gotDaemon, gotPath, gotHash string
 	mw := DaemonAuth(nil, nil, cache) // nil queries — only safe on cache hit
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotWS = DaemonWorkspaceIDFromContext(r.Context())
 		gotDaemon = DaemonIDFromContext(r.Context())
 		gotPath = DaemonAuthPathFromContext(r.Context())
+		gotHash = DaemonTokenHashFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -48,6 +49,9 @@ func TestDaemonAuth_DaemonTokenCacheHit(t *testing.T) {
 	}
 	if gotPath != DaemonAuthPathDaemonToken {
 		t.Fatalf("expected auth path %q, got %q", DaemonAuthPathDaemonToken, gotPath)
+	}
+	if gotHash != hash {
+		t.Fatalf("expected exact token hash %q, got %q", hash, gotHash)
 	}
 }
 

@@ -83,6 +83,10 @@ func setHandlerTestWorkspaceRepos(t *testing.T, repos []map[string]string) {
 // newDaemonTokenRequest creates an HTTP request with daemon token context set
 // (simulating DaemonAuth middleware for mdt_ tokens).
 func newDaemonTokenRequest(method, path string, body any, workspaceID, daemonID string) *http.Request {
+	return newDaemonTokenRequestWithHash(method, path, body, workspaceID, daemonID, "")
+}
+
+func newDaemonTokenRequestWithHash(method, path string, body any, workspaceID, daemonID, tokenHash string) *http.Request {
 	var buf bytes.Buffer
 	if body != nil {
 		json.NewEncoder(&buf).Encode(body)
@@ -90,7 +94,7 @@ func newDaemonTokenRequest(method, path string, body any, workspaceID, daemonID 
 	req := httptest.NewRequest(method, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
 	// No X-User-ID — daemon tokens don't set it.
-	ctx := middleware.WithDaemonContext(req.Context(), workspaceID, daemonID)
+	ctx := middleware.WithDaemonTokenContext(req.Context(), workspaceID, daemonID, tokenHash)
 	return req.WithContext(ctx)
 }
 

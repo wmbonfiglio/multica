@@ -10,22 +10,6 @@ INSERT INTO daemon_token (
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
--- name: GetActiveDaemonTokenInstall :one
--- Returns the install-time provenance (creator + source) for the active
--- daemon_token bound to (workspace_id, daemon_id). DaemonRegister calls
--- this on the mdt_ auth branch to seed agent_runtime.owner_id and
--- metadata.install_source so script-installed Computers carry their
--- minter identity through the register path. Picks the most recent
--- non-revoked row if multiple mdt_ tokens exist for the same daemon.
-SELECT created_by_user_id, install_source
-FROM daemon_token
-WHERE workspace_id = $1
-  AND daemon_id = $2
-  AND revoked_at IS NULL
-  AND expires_at > now()
-ORDER BY created_at DESC
-LIMIT 1;
-
 -- name: GetDaemonTokenByHash :one
 -- §6.4 / D4: keep the original `expires_at > now()` filter and AND-stack
 -- `revoked_at IS NULL`. mdt_ tokens are issued with expires_at = now() + 100y,

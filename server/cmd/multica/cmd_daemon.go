@@ -156,11 +156,27 @@ func healthPortForProfile(profile string) int {
 // --- daemon start ---
 
 func runDaemonStart(cmd *cobra.Command, _ []string) error {
-	// An install token is single-use. Refuse before exchange when this start
-	// would only fail because the same-profile daemon is already running.
+	profile := resolveProfile(cmd)
+	healthPort := healthPortForProfile(profile)
+
 	if installTokenFromCommand(cmd) != "" {
-		if err := ensureDaemonNotAlreadyRunningForInstall(cmd); err != nil {
-			return err
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		health := checkDaemonHealthOnPort(ctx, healthPort)
+		cancel()
+		if health["status"] == "running" {
+			if err := maybeExchangeInstallToken(cmd); err != nil {
+				return err
+			}
+			if err := requestDaemonWorkspaceSync(healthPort); err == nil {
+				fmt.Fprintln(os.Stderr, "Daemon is already running; synced workspace credentials.")
+				return nil
+			} else {
+				fmt.Fprintf(os.Stderr, "Workspace sync request failed (%v); restarting daemon to pick up the new workspace.\n", err)
+			}
+			if err := restartRunningDaemonForInstall(healthPort, health); err != nil {
+				return err
+			}
+			return runDaemonStartWithoutInstallToken(cmd, nil)
 		}
 	}
 
@@ -186,23 +202,6 @@ func installTokenFromCommand(cmd *cobra.Command) string {
 		token = os.Getenv("MULTICA_INSTALL_TOKEN")
 	}
 	return strings.TrimSpace(token)
-}
-
-func ensureDaemonNotAlreadyRunningForInstall(cmd *cobra.Command) error {
-	profile := resolveProfile(cmd)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	health := checkDaemonHealthOnPort(ctx, healthPortForProfile(profile))
-	if health["status"] != "running" {
-		return nil
-	}
-
-	label := "daemon"
-	if profile != "" {
-		label = fmt.Sprintf("daemon [%s]", profile)
-	}
-	pid, _ := health["pid"].(float64)
-	return fmt.Errorf("%s is already running (pid %v). Install token was not redeemed; stop or restart the daemon, then retry", label, int(pid))
 }
 
 // maybeExchangeInstallToken redeems a `mit_` install token for a long-lived
@@ -296,6 +295,65 @@ func maybeExchangeInstallToken(cmd *cobra.Command) error {
 	// the exchange landed.
 	fmt.Fprintf(os.Stderr, "Install token redeemed; daemon credential saved for workspace %s\n", resp.WorkspaceID)
 	return nil
+}
+
+func requestDaemonWorkspaceSync(healthPort int) error {
+	url := fmt.Sprintf("http://127.0.0.1:%d/workspaces/sync", healthPort)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func restartRunningDaemonForInstall(healthPort int, health map[string]any) error {
+	pid, _ := health["pid"].(float64)
+	if pid > 0 {
+		fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", int(pid))
+		if err := requestDaemonShutdown(healthPort); err != nil {
+			if p, perr := os.FindProcess(int(pid)); perr == nil {
+				_ = p.Kill()
+			}
+		}
+	}
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		h := checkDaemonHealthOnPort(ctx, healthPort)
+		cancel()
+		if h["status"] != "running" {
+			return nil
+		}
+	}
+	return fmt.Errorf("daemon is still stopping; retry the Add Computer command after it exits")
+}
+
+func runDaemonStartWithoutInstallToken(cmd *cobra.Command, args []string) error {
+	oldEnv, hadEnv := os.LookupEnv("MULTICA_INSTALL_TOKEN")
+	os.Unsetenv("MULTICA_INSTALL_TOKEN")
+	if hadEnv {
+		defer os.Setenv("MULTICA_INSTALL_TOKEN", oldEnv)
+	}
+
+	flag := cmd.Flags().Lookup("install-token")
+	oldFlag := ""
+	if flag != nil {
+		oldFlag = flag.Value.String()
+		_ = cmd.Flags().Set("install-token", "")
+		defer cmd.Flags().Set("install-token", oldFlag)
+	}
+
+	return runDaemonStart(cmd, args)
 }
 
 func runDaemonBackground(cmd *cobra.Command) error {
