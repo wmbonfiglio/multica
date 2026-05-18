@@ -214,23 +214,24 @@ export function StepPlatformFork({
                 onAction={handleOpenCloud}
               />
             </div>
+
+            {/* Inline action bar — hint on the left, Skip on the right.
+                Advancement for the CLI path is owned by the CLI
+                dialog's own "Connect & continue" button; Skip is the
+                self-serve exit. */}
+            <div className="mt-8 flex max-w-[560px] flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <span
+                aria-live="polite"
+                className="text-xs text-muted-foreground"
+              >
+                {footerHint}
+              </span>
+              <Button variant="secondary" onClick={() => onNext(null)}>
+                {t(($) => $.step_runtime.skip)}
+              </Button>
+            </div>
           </div>
         </main>
-
-        {/* Footer — hint on the left, Skip on the right. Advancement
-            for the CLI path is owned by the CLI dialog's own
-            "Connect & continue" button; Skip is the self-serve exit. */}
-        <footer className="flex shrink-0 items-center justify-between gap-4 bg-background px-6 py-4 sm:px-10 md:px-14 lg:px-16">
-          <span
-            aria-live="polite"
-            className="text-xs text-muted-foreground"
-          >
-            {footerHint}
-          </span>
-          <Button variant="secondary" onClick={() => onNext(null)}>
-            {t(($) => $.step_runtime.skip)}
-          </Button>
-        </footer>
       </div>
 
       {/* Right — always-visible aside */}

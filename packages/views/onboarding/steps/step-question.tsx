@@ -27,12 +27,12 @@ export interface QuestionOption {
 }
 
 /**
- * Generic per-question step used by Source / Role / Use case. Adopts
- * the same 3-region chrome as Workspace / Runtime / Agent: Back lives
- * in the page header next to the step indicator; Skip + Continue live
- * in a sticky footer with a status hint. This keeps the back/skip/
- * continue affordance in the same on-screen position across every step
- * of onboarding.
+ * Generic per-question step used by Source / Role / Use case. Back
+ * lives in the page header next to the step indicator; Skip + Continue
+ * sit inline directly below the options grid (with a status hint),
+ * not in a sticky bottom footer — the form usually only fills the top
+ * third of the viewport, and a footer pinned to the page bottom left a
+ * large dead zone between the options and the action buttons.
  */
 export function StepQuestion({
   step,
@@ -168,26 +168,26 @@ export function StepQuestion({
               ),
             )}
           </fieldset>
+
+          <div className="mt-8 flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+            <span
+              aria-live="polite"
+              className="mr-auto text-xs text-muted-foreground"
+            >
+              {footerHint}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={onSkip}>
+                {t(($) => $.common.skip)}
+              </Button>
+              <Button size="lg" disabled={!canContinue} onClick={confirmAdvance}>
+                {t(($) => $.common.continue)}
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </div>
       </main>
-
-      <footer className="flex shrink-0 items-center justify-end gap-4 bg-background px-6 py-4 sm:px-10 md:px-14 lg:px-16">
-        <span
-          aria-live="polite"
-          className="mr-auto text-xs text-muted-foreground"
-        >
-          {footerHint}
-        </span>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={onSkip}>
-            {t(($) => $.common.skip)}
-          </Button>
-          <Button size="lg" disabled={!canContinue} onClick={confirmAdvance}>
-            {t(($) => $.common.continue)}
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </footer>
     </div>
   );
 }

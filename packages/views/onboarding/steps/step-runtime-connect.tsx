@@ -233,7 +233,12 @@ function FancyView({
 
         {/* Scrollable middle — content changes by phase but always wraps
             at max-w-[620px] so the 2-column runtime grid has room to
-            breathe without stretching into readability territory. */}
+            breathe without stretching into readability territory.
+
+            Skip + Continue sit inline directly below the phase view
+            (not in a sticky bottom footer) so the action bar stays
+            close to the form content and the page doesn't leave a
+            large dead zone when the runtime list is short. */}
         <main
           ref={mainRef}
           style={fadeStyle}
@@ -266,39 +271,35 @@ function FancyView({
                 onSkip={() => onNext(null)}
               />
             )}
+
+            <div className="mt-8 flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+              <span
+                aria-live="polite"
+                className="mr-auto text-xs text-muted-foreground"
+              >
+                {footerHint}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={submitting}
+                  onClick={handleSkip}
+                >
+                  {t(($) => $.step_runtime.skip)}
+                </Button>
+                <Button
+                  size="lg"
+                  disabled={!canContinue || submitting}
+                  onClick={handleContinue}
+                >
+                  {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {t(($) => $.common.continue)}
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </div>
         </main>
-
-        {/* Sticky footer — Skip (always) on the left, hint + Continue
-            (gated on runtime selection) on the right. Skip is the
-            self-serve exit: onNext(null) → bootstrap runs the no-agent
-            branch, onboarding still completes. */}
-        <footer className="flex shrink-0 items-center justify-end gap-4 bg-background px-6 py-4 sm:px-10 md:px-14 lg:px-16">
-          <span
-            aria-live="polite"
-            className="mr-auto text-xs text-muted-foreground"
-          >
-            {footerHint}
-          </span>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              disabled={submitting}
-              onClick={handleSkip}
-            >
-              {t(($) => $.step_runtime.skip)}
-            </Button>
-            <Button
-              size="lg"
-              disabled={!canContinue || submitting}
-              onClick={handleContinue}
-            >
-              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              {t(($) => $.common.continue)}
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </footer>
       </div>
 
       {/* Right — always-visible educational aside. "You picked" subsection
