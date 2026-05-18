@@ -36,10 +36,11 @@ import {
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { ActorAvatar } from "../../common/actor-avatar";
 import {
-  TimezoneSelect,
-  browserTimezone,
-} from "../../common/timezone-select";
-import { aggregateByWeek, formatTokens } from "../../runtimes/utils";
+  addDaysIso,
+  aggregateByWeek,
+  formatTokens,
+  todayIso,
+} from "../../runtimes/utils";
 import { useT } from "../../i18n";
 import {
   aggregateAgentTokens,
@@ -96,6 +97,14 @@ function fmtMoney(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+// Weekly aggregation is locked to UTC: the dashboard daily rollup buckets
+// data by UTC `bucket_date` (and the raw fallback queries by `DATE(...)`,
+// also UTC), so any other zone for client-side week boundaries would put
+// cross-midnight rows into the wrong calendar week. Runtime-detail can use
+// the runtime's IANA tz because its rollup is materialized in that tz; the
+// workspace rollup has no equivalent, so weekly is UTC-only here.
+const WEEK_TZ = "UTC";
+
 // Local segmented control — same visual language the runtime usage section
 // uses for its period / tab toggles. shadcn's Tabs is wired for full tab
 // pages with ARIA semantics the compact toolbar pill doesn't need.
@@ -141,16 +150,10 @@ function Segmented<T extends string | number>({
  */
 export function DashboardPage() {
   const { t } = useT("usage");
-  const { t: tRuntimes } = useT("runtimes");
   const wsId = useWorkspaceId();
   const [dim, setDim] = useState<Dim>("daily");
   const [days, setDays] = useState<TimeRange>(30);
   const [projectValue, setProjectValue] = useState<string>(ALL_PROJECTS);
-  // Default to the browser's resolved zone so day-boundary buckets match the
-  // user's local clock on first render. Pure client-state — the rollup queries
-  // are zone-agnostic today; this is the UI affordance the user can pin. The
-  // weekly aggregation also uses this tz to decide what "this week" means.
-  const [timezone, setTimezone] = useState<string>(() => browserTimezone());
 
   const allowedRanges = rangesForDim(dim);
   const handleDimChange = (next: Dim) => {
@@ -179,17 +182,52 @@ export function DashboardPage() {
     return projects.some((p) => p.id === projectValue) ? projectValue : null;
   }, [projectValue, projects]);
 
-  const dailyQuery = useQuery(dashboardUsageDailyOptions(wsId, days, projectId));
+  // The weekly chart paints `ceil(days / 7)` trailing calendar weeks anchored
+  // at today-in-UTC. In the worst case (today = Sunday) the leftmost Monday
+  // sits `weekCount * 7 - 1` days back, so a vanilla `days=30` request would
+  // silently truncate the leftmost bucket. Over-fetch the per-date queries
+  // to cover the full first week; the per-agent rollups stay at `days` so
+  // KPI/leaderboard labels (e.g. "Tasks · 30D") keep their advertised window.
+  const weekCount = Math.max(1, Math.ceil(days / 7));
+  const chartFetchDays = dim === "weekly" ? weekCount * 7 : days;
+
+  const dailyQuery = useQuery(
+    dashboardUsageDailyOptions(wsId, chartFetchDays, projectId),
+  );
   const byAgentQuery = useQuery(dashboardUsageByAgentOptions(wsId, days, projectId));
   const runTimeQuery = useQuery(dashboardAgentRunTimeOptions(wsId, days, projectId));
   const runTimeDailyQuery = useQuery(
-    dashboardRunTimeDailyOptions(wsId, days, projectId),
+    dashboardRunTimeDailyOptions(wsId, chartFetchDays, projectId),
   );
 
   const dailyUsage = dailyQuery.data ?? EMPTY_DAILY;
   const byAgentUsage = byAgentQuery.data ?? EMPTY_BY_AGENT;
   const runTimeRows = runTimeQuery.data ?? EMPTY_RUNTIME;
   const runTimeDailyRows = runTimeDailyQuery.data ?? EMPTY_RUNTIME_DAILY;
+
+  // Daily-aggregation surfaces (cost/tokens/time/tasks KPIs and the Daily
+  // trend chart) re-scope to the user-selected `days` even when we
+  // over-fetched for the weekly chart. UTC matches the bucket_date the
+  // backend filters on, so the cutoff lands on the same calendar boundary
+  // the rollup used.
+  const dailyCutoffIso = useMemo(
+    () => addDaysIso(todayIso(WEEK_TZ), -(days - 1)),
+    [days],
+  );
+  const dailyUsageInWindow = useMemo(
+    () =>
+      dim === "weekly"
+        ? dailyUsage.filter((u) => u.date >= dailyCutoffIso)
+        : dailyUsage,
+    [dailyUsage, dim, dailyCutoffIso],
+  );
+  const runTimeDailyInWindow = useMemo(
+    () =>
+      dim === "weekly"
+        ? runTimeDailyRows.filter((r) => r.date >= dailyCutoffIso)
+        : runTimeDailyRows,
+    [runTimeDailyRows, dim, dailyCutoffIso],
+  );
 
   const isLoading =
     dailyQuery.isLoading ||
@@ -208,37 +246,46 @@ export function DashboardPage() {
     runTimeDailyRows.length === 0;
 
   // Cost / token math — re-derived when usage, days, or pricings change.
-  const totals = useMemo(() => computeDailyTotals(dailyUsage), [dailyUsage]);
-  const dailyCost = useMemo(() => aggregateDailyCost(dailyUsage), [dailyUsage]);
-  const dailyTokens = useMemo(() => aggregateDailyTokens(dailyUsage), [dailyUsage]);
+  const totals = useMemo(
+    () => computeDailyTotals(dailyUsageInWindow),
+    [dailyUsageInWindow],
+  );
+  const dailyCost = useMemo(
+    () => aggregateDailyCost(dailyUsageInWindow),
+    [dailyUsageInWindow],
+  );
+  const dailyTokens = useMemo(
+    () => aggregateDailyTokens(dailyUsageInWindow),
+    [dailyUsageInWindow],
+  );
   const dailyTime = useMemo(
-    () => aggregateDailyTime(runTimeDailyRows),
-    [runTimeDailyRows],
+    () => aggregateDailyTime(runTimeDailyInWindow),
+    [runTimeDailyInWindow],
   );
   const dailyTasks = useMemo(
-    () => aggregateDailyTasks(runTimeDailyRows),
-    [runTimeDailyRows],
+    () => aggregateDailyTasks(runTimeDailyInWindow),
+    [runTimeDailyInWindow],
   );
 
-  // Weekly aggregates — built from the same backing queries via the shared
-  // `aggregateByWeek` helper (cost / tokens) and the dashboard-local time /
-  // tasks folds. Trailing N calendar weeks are anchored at today-in-tz with
-  // pre-zeroed buckets, so sparse weeks render as empty bars instead of being
-  // dropped (mirrors the MUL-2382 window scoping fix on the runtime page).
-  const weekCount = Math.max(1, Math.ceil(days / 7));
+  // Weekly aggregates — built from the over-fetched per-date queries so the
+  // leftmost trailing week always has data even when the user-selected `days`
+  // (e.g. 30D) is shorter than the chart's `weekCount * 7` span. Buckets are
+  // pre-zeroed inside the helpers, so sparse weeks render as empty bars
+  // instead of being dropped (MUL-2382 weekly window scoping). Locked to
+  // UTC so the week boundaries match the backend's UTC `bucket_date`.
   const weekly = useMemo(
-    () => aggregateByWeek(dailyUsage, timezone, weekCount),
-    [dailyUsage, timezone, weekCount],
+    () => aggregateByWeek(dailyUsage, WEEK_TZ, weekCount),
+    [dailyUsage, weekCount],
   );
   const weeklyCost = weekly.weeklyCostStack;
   const weeklyTokens = weekly.weeklyTokens;
   const weeklyTime = useMemo(
-    () => aggregateWeeklyTime(runTimeDailyRows, timezone, weekCount),
-    [runTimeDailyRows, timezone, weekCount],
+    () => aggregateWeeklyTime(runTimeDailyRows, WEEK_TZ, weekCount),
+    [runTimeDailyRows, weekCount],
   );
   const weeklyTasks = useMemo(
-    () => aggregateWeeklyTasks(runTimeDailyRows, timezone, weekCount),
-    [runTimeDailyRows, timezone, weekCount],
+    () => aggregateWeeklyTasks(runTimeDailyRows, WEEK_TZ, weekCount),
+    [runTimeDailyRows, weekCount],
   );
   const agentTokenRows = useMemo(
     () => aggregateAgentTokens(byAgentUsage),
@@ -265,12 +312,10 @@ export function DashboardPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* h-auto + min-h-12 + flex-wrap: the toolbar (project filter, range
-          switch, timezone select) overflows the single h-12 row on narrow
-          and medium widths once the timezone picker is added — letting the
-          right cluster wrap underneath keeps every control reachable
-          without an off-screen bleed. Wider viewports still render the
-          original single row. */}
+      {/* h-auto + min-h-12 + flex-wrap: the toolbar (project filter,
+          dimension switch, range switch) wraps on narrow viewports so every
+          control stays reachable. Wider viewports still render the original
+          single row. */}
       <PageHeader className="h-auto min-h-12 flex-wrap justify-between gap-y-1.5 px-5 py-1.5 sm:py-0">
         <div className="flex min-w-0 items-center gap-2">
           <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -294,12 +339,6 @@ export function DashboardPage() {
             value={days}
             onChange={setDays}
             options={allowedRanges.map((r) => ({ label: r.label, value: r.days }))}
-          />
-          <TimezoneSelect
-            value={timezone}
-            onValueChange={setTimezone}
-            browserSuffix={tRuntimes(($) => $.detail.timezone_browser_suffix)}
-            triggerClassName="rounded-md font-mono text-xs"
           />
         </div>
       </PageHeader>
