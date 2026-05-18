@@ -415,7 +415,7 @@ function CliInstallDialog({
           </span>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={onClose}>
-              {t(($) => $.step_runtime.dialog_cancel)}
+              {t(($) => $.common.cancel)}
             </Button>
             <Button disabled={!canConnect} onClick={onConnect}>
               {t(($) => $.step_platform.cli_dialog_connect)}

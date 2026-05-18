@@ -39,7 +39,8 @@
   "common": {
     "back": "返回",
     "continue": "继续",
-    "skip": "跳过"
+    "skip": "跳过",
+    "cancel": "取消"
   },
   "questions": {
     "eyebrow_about_you": "关于你",
@@ -264,26 +265,22 @@
     "status_n_online": "{{count}} 个在线",
     "online_label": "在线",
     "offline_label": "离线",
-    "empty_headline": "这台电脑上还没装支持的 AI 编程工具。",
-    "empty_lede_prefix": "Multica 借助本地的 AI 编程工具运行，比如 ",
-    "empty_lede_suffix": " 等 —— 这台电脑上一个都没装。装一个再回来，或在下面挑一条路。",
+    "empty_headline": "这台电脑上还没有可用的 agent 运行时。",
+    "empty_lede_prefix": "agent 运行时是我们接管的 AI 编程工具，比如 ",
+    "empty_lede_suffix": "。装好其中之一后点刷新，或在下面挑一条路。",
     "empty_skip_title": "暂时跳过",
     "empty_skip_subtitle": "进入工作区（只读模式）。在这台电脑上连接 agent 运行时之前，智能体无法执行 task —— 但你仍可以浏览、规划、邀请同事。",
     "empty_skip_action": "跳过",
     "empty_waitlist_title": "改用云电脑",
-    "empty_waitlist_subtitle": "我们会在云上为你运行一台电脑 —— 无需本地安装，无需配置。尚未上线，点击留下邮箱。",
-    "empty_waitlist_action": "加入候补",
-    "empty_waitlist_done": "已在候补",
-    "dialog_title": "加入云电脑候补名单",
-    "dialog_description": "云电脑尚未上线。留下邮箱，上线时通过邮件通知你。",
-    "dialog_close": "关闭",
-    "dialog_cancel": "取消",
+    "empty_waitlist_subtitle": "我们会在云上为你运行一台电脑。尚未上线。",
+    "empty_waitlist_action": "敬请期待",
     "skip": "暂时跳过",
+    "refresh": "刷新",
+    "refreshing": "正在刷新…",
     "hint_selected": "已选择：{{name}}",
     "hint_pick": "在上方选一个 agent 运行时继续。",
     "hint_waiting": "等待第一个结果...",
-    "hint_waitlist_done": "已在候补名单 —— 跳过即可继续探索。",
-    "hint_skip_or_waitlist": "跳过进入工作区，或在上方加入云候补。"
+    "hint_skip_or_refresh": "装好后点刷新，或跳过进入工作区。"
   },
   "step_platform": {
     "eyebrow": "连接一台电脑",
