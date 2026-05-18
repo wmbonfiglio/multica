@@ -58,16 +58,15 @@ export function StepUseCase({
       onAnswer={(slug) => {
         if (slug === "other") {
           onChange({ use_case: "other", use_case_skipped: false });
-          if ((answers.use_case_other ?? "").trim()) onAdvance();
         } else {
           onChange({
             use_case: slug as UseCase,
             use_case_other: null,
             use_case_skipped: false,
           });
-          onAdvance();
         }
       }}
+      onAdvance={onAdvance}
       onSkip={() => {
         onChange({ use_case: null, use_case_other: null, use_case_skipped: true });
         onSkip();

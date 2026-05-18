@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Input } from "@multica/ui/components/ui/input";
 import { cn } from "@multica/ui/lib/utils";
 
 const OTHER_INPUT_MAX_LENGTH = 80;
@@ -9,10 +8,10 @@ const OTHER_INPUT_MAX_LENGTH = 80;
 /**
  * Card-grid option used by the per-question questionnaire steps
  * (Source / Role / Use case). One row = icon + label. Clicking the
- * card both selects and advances — there is no Continue button on
- * these steps. The `Other` variant expands a text input below the
- * row instead of auto-advancing; the parent gates advance on
- * non-empty trimmed text.
+ * card selects it; the parent step decides when to advance (an
+ * explicit Continue button gates the transition so users can change
+ * their mind before committing). The `Other` variant swaps its
+ * label area for a free-text input when selected.
  */
 export function IconOptionCard({
   icon,
@@ -52,9 +51,10 @@ export function IconOptionCard({
 }
 
 /**
- * "Other" variant — expands a free-text input below the row when
- * selected. Auto-focuses the input on open. The parent controls
- * advance-on-Enter / advance-on-blur via the `onConfirm` callback.
+ * "Other" variant — when selected, the label slot is replaced by a
+ * borderless text input that inherits the card's typography so the
+ * row keeps the same visual weight as the other cards. Auto-focuses
+ * on open; Enter triggers the parent's `onConfirm`.
  */
 export function IconOtherOptionCard({
   icon,
@@ -77,49 +77,45 @@ export function IconOtherOptionCard({
 }) {
   return (
     <div
+      role="radio"
+      aria-checked={selected}
+      onClick={() => {
+        if (!selected) onSelect();
+      }}
       className={cn(
-        "flex w-full flex-col rounded-xl border bg-card transition-all",
+        "flex w-full items-center gap-3 rounded-xl border bg-card px-4 py-3 text-left transition-all",
         selected
           ? "border-foreground shadow-[inset_0_0_0_1px_var(--color-foreground)]"
-          : "hover:border-foreground/30",
+          : "cursor-pointer hover:border-foreground/30 hover:bg-accent/30",
       )}
     >
-      <button
-        type="button"
-        role="radio"
-        aria-checked={selected}
-        onClick={onSelect}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
+      <span
+        aria-hidden
+        className="flex h-7 w-7 shrink-0 items-center justify-center text-[18px] leading-none text-foreground"
       >
-        <span
-          aria-hidden
-          className="flex h-7 w-7 shrink-0 items-center justify-center text-[18px] leading-none text-foreground"
-        >
-          {icon}
-        </span>
+        {icon}
+      </span>
+      {selected ? (
+        <input
+          autoFocus
+          type="text"
+          value={otherValue}
+          onChange={(e) => onOtherChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && otherValue.trim()) {
+              e.preventDefault();
+              onConfirm();
+            }
+          }}
+          placeholder={placeholder}
+          maxLength={OTHER_INPUT_MAX_LENGTH}
+          aria-label={placeholder}
+          className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[14px] font-medium leading-tight text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+        />
+      ) : (
         <span className="text-[14px] font-medium leading-tight text-foreground">
           {label}
         </span>
-      </button>
-      {selected && (
-        <div className="px-4 pb-3 pl-[52px]">
-          <Input
-            autoFocus
-            type="text"
-            value={otherValue}
-            onChange={(e) => onOtherChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && otherValue.trim()) {
-                e.preventDefault();
-                onConfirm();
-              }
-            }}
-            placeholder={placeholder}
-            maxLength={OTHER_INPUT_MAX_LENGTH}
-            className="h-8 rounded-none border-x-0 border-t-0 border-b px-0 text-sm shadow-none focus-visible:border-foreground focus-visible:ring-0"
-            aria-label={placeholder}
-          />
-        </div>
       )}
     </div>
   );

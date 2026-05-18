@@ -14,9 +14,9 @@ import { useT } from "../../i18n";
 
 /**
  * One option in the card grid. `slug` is the persisted enum value;
- * `icon` is a React node (lucide icon or emoji span); `label` is
- * the localized string already resolved by the caller. `isOther`
- * flips this card into a free-text input row.
+ * `icon` is a React node (lucide icon, brand SVG, or emoji span);
+ * `label` is the localized string already resolved by the caller.
+ * `isOther` flips this card into a free-text input row.
  */
 export interface QuestionOption {
   slug: string;
@@ -29,12 +29,11 @@ export interface QuestionOption {
  * Generic per-question step used by Source / Role / Use case. The
  * parent threads in the question copy, the option list, and the
  * three callbacks (answer / skip / back). Layout is a centered
- * card grid with an editorial heading; bottom-left footer carries
- * Back + Skip text buttons. Click-to-advance — no Continue button.
- *
- * The "Other" path is the only exception to click-to-advance: the
- * row expands a text input and advance is gated on either Enter or
- * the Continue helper.
+ * card grid with an editorial heading; below the grid sits a
+ * three-button action row — Back, Skip, Continue — keeping the
+ * controls visually anchored to the content rather than floating
+ * at the page edge. Continue is the only path that advances, so
+ * users can change their selection before committing.
  */
 export function StepQuestion({
   step,
@@ -47,6 +46,7 @@ export function StepQuestion({
   onOtherChange,
   otherPlaceholder,
   onAnswer,
+  onAdvance,
   onSkip,
   onBack,
 }: {
@@ -59,7 +59,10 @@ export function StepQuestion({
   otherValue: string;
   onOtherChange: (value: string) => void;
   otherPlaceholder: string;
+  /** Record the selection in the parent — does NOT advance. */
   onAnswer: (slug: string) => void;
+  /** Commit the current selection and move to the next step. */
+  onAdvance: () => void;
   onSkip: () => void;
   onBack?: () => void;
 }) {
@@ -72,8 +75,6 @@ export function StepQuestion({
     if (option.isOther) {
       setPendingOther(true);
       onOtherChange(otherValue);
-      // Switch the persisted selection to "other" but do not
-      // auto-advance — wait for the user to confirm via Enter.
       onAnswer(option.slug);
       return;
     }
@@ -81,32 +82,22 @@ export function StepQuestion({
     onAnswer(option.slug);
   };
 
-  const confirmOther = () => {
-    if (otherValue.trim()) {
-      onAnswer("other");
-      setPendingOther(false);
-    }
-  };
-
   const selectedOption = options.find((o) => o.slug === selectedSlug) ?? null;
   const otherActive = selectedOption?.isOther || pendingOther;
+  const otherFilled = (otherValue ?? "").trim().length > 0;
+  // Continue is enabled when:
+  //   - a non-Other option is selected, OR
+  //   - Other is selected AND the free-text input has content.
+  const canContinue = selectedSlug !== null && (!otherActive || otherFilled);
+
+  const confirmAdvance = () => {
+    if (canContinue) onAdvance();
+  };
 
   return (
     <div className="animate-onboarding-enter flex h-full min-h-0 flex-col bg-background">
       <DragStrip />
-      <header className="flex shrink-0 items-center gap-4 bg-background px-6 py-3 sm:px-10 md:px-14 lg:px-16">
-        {onBack ? (
-          <button
-            type="button"
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            {t(($) => $.common.back)}
-          </button>
-        ) : (
-          <span aria-hidden className="w-0" />
-        )}
+      <header className="flex shrink-0 items-center bg-background px-6 py-3 sm:px-10 md:px-14 lg:px-16">
         <div className="flex-1">
           <StepHeader currentStep={step} />
         </div>
@@ -145,7 +136,7 @@ export function StepQuestion({
                   onSelect={() => handleSelect(option)}
                   otherValue={otherValue}
                   onOtherChange={onOtherChange}
-                  onConfirm={confirmOther}
+                  onConfirm={confirmAdvance}
                   placeholder={otherPlaceholder}
                 />
               ) : (
@@ -159,36 +150,36 @@ export function StepQuestion({
               ),
             )}
           </fieldset>
+
+          <div className="mt-8 flex items-center gap-2">
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                className="flex items-center gap-1.5 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                {t(($) => $.common.back)}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onSkip}
+              className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+            >
+              {t(($) => $.common.skip)}
+            </button>
+            <button
+              type="button"
+              onClick={confirmAdvance}
+              disabled={!canContinue}
+              className="ml-auto rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              {t(($) => $.common.continue)}
+            </button>
+          </div>
         </div>
       </main>
-
-      <footer className="flex shrink-0 items-center gap-6 bg-background px-6 py-4 sm:px-10 md:px-14 lg:px-16">
-        {onBack ? (
-          <button
-            type="button"
-            onClick={onBack}
-            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            {t(($) => $.common.back)}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={onSkip}
-          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {t(($) => $.common.skip)}
-        </button>
-        {otherActive && otherValue.trim() ? (
-          <button
-            type="button"
-            onClick={confirmOther}
-            className="ml-auto text-sm font-medium text-foreground transition-colors hover:opacity-80"
-          >
-            {t(($) => $.common.continue)} →
-          </button>
-        ) : null}
-      </footer>
     </div>
   );
 }

@@ -62,16 +62,15 @@ export function StepRole({
       onAnswer={(slug) => {
         if (slug === "other") {
           onChange({ role: "other", role_skipped: false });
-          if ((answers.role_other ?? "").trim()) onAdvance();
         } else {
           onChange({
             role: slug as Role,
             role_other: null,
             role_skipped: false,
           });
-          onAdvance();
         }
       }}
+      onAdvance={onAdvance}
       onSkip={() => {
         onChange({ role: null, role_other: null, role_skipped: true });
         onSkip();

@@ -36,8 +36,9 @@ test("onboarding v2 — welcome → source → role → use_case (skip path)", a
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${SHOTS_DIR}/02-source.png` });
 
-  // Pick Friends/colleagues — should auto-advance
+  // Pick Friends/colleagues then click Continue to advance.
   await page.getByRole("radio", { name: /Friends or colleagues/i }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
 
   // 3. Role step
   await expect(page.getByText("Which best describes you?")).toBeVisible({ timeout: 10000 });
@@ -54,8 +55,9 @@ test("onboarding v2 — welcome → source → role → use_case (skip path)", a
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${SHOTS_DIR}/04-use-case.png` });
 
-  // Pick ship_code → workspace step
+  // Pick ship_code then Continue → workspace step.
   await page.getByRole("radio", { name: /Ship code with AI agents/i }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
 
   // 5. Workspace step (legacy)
   await expect(page.getByRole("heading", { name: /Name your workspace/i })).toBeVisible({ timeout: 10000 });
