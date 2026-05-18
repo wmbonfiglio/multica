@@ -349,17 +349,16 @@ function WhenChart({
     () => aggregateByDate(filtered),
     [filtered, pricings],
   );
-  // Weekly aggregation runs on the FULL 180d cache (not the windowed slice)
-  // so the rolling-week label and partial flag don't depend on where the
-  // window happens to cut. The Weekly tab then takes the last N weeks for
-  // the active period.
-  const weeklyAll = useMemo(
-    () => aggregateByWeek(usage, tz),
-    [usage, tz, pricings],
-  );
+  // Weekly aggregation builds exactly N trailing calendar weeks anchored at
+  // today (in the runtime tz). Buckets are pre-zeroed inside aggregateByWeek
+  // so weeks with no usage render as empty bars; rows outside the window are
+  // dropped. This avoids the earlier bug where slicing on a sparse 180-day
+  // aggregate surfaced old populated weeks instead of in-range empty ones.
   const weekCount = Math.max(1, Math.ceil(days / 7));
-  const weeklyTokens = weeklyAll.weeklyTokens.slice(-weekCount);
-  const weeklyCostStack = weeklyAll.weeklyCostStack.slice(-weekCount);
+  const { weeklyTokens, weeklyCostStack } = useMemo(
+    () => aggregateByWeek(usage, tz, weekCount),
+    [usage, tz, weekCount, pricings],
+  );
   const hourlyCost = useMemo(
     () =>
       aggregateCostByHour(byHourRows).map((row) => ({

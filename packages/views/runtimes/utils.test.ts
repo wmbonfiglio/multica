@@ -491,7 +491,10 @@ describe("aggregateByWeek", () => {
   }
 
   it("groups daily rows into Mon-anchored ISO weeks", () => {
-    vi.setSystemTime(new Date("2026-05-25T12:00:00Z"));
+    // 2026-05-24 is Sunday, so the calendar week containing "today" is
+    // Mon=05-18..Sun=05-24. With weekCount=2 the window covers weeks
+    // 2026-05-11 and 2026-05-18 — exactly the two weeks the rows fall in.
+    vi.setSystemTime(new Date("2026-05-24T12:00:00Z"));
     // 2026-05-11 is Mon; 2026-05-17 is Sun (same week).
     // 2026-05-18 is Mon (next week).
     const rows = [
@@ -499,7 +502,7 @@ describe("aggregateByWeek", () => {
       makeUsage("2026-05-17", 0, 1_000_000),
       makeUsage("2026-05-18", 2_000_000, 0),
     ];
-    const { weeklyTokens } = aggregateByWeek(rows, "UTC");
+    const { weeklyTokens } = aggregateByWeek(rows, "UTC", 2);
     expect(weeklyTokens).toHaveLength(2);
     expect(weeklyTokens[0]).toMatchObject({
       weekStart: "2026-05-11",
@@ -522,7 +525,7 @@ describe("aggregateByWeek", () => {
     // 2026-05-20 is a Wednesday (Mon=05-18, Sun=05-24).
     vi.setSystemTime(new Date("2026-05-20T08:00:00Z"));
     const rows = [makeUsage("2026-05-18", 1_000_000, 0)];
-    const { weeklyTokens } = aggregateByWeek(rows, "UTC");
+    const { weeklyTokens } = aggregateByWeek(rows, "UTC", 1);
     expect(weeklyTokens[0]).toMatchObject({
       weekStart: "2026-05-18",
       weekEnd: "2026-05-24",
@@ -532,15 +535,71 @@ describe("aggregateByWeek", () => {
   });
 
   it("sums costs per week using the model pricing table", () => {
-    vi.setSystemTime(new Date("2026-05-25T12:00:00Z"));
+    // 2026-05-17 sits in the calendar week of 2026-05-11..2026-05-17, so
+    // weekCount=1 anchors the window on that same week.
+    vi.setSystemTime(new Date("2026-05-17T12:00:00Z"));
     // 1M input × $3 + 1M output × $15 = $18 per row. Two rows in the same
     // week (Mon + Wed) → $36 weekly total.
     const rows = [
       makeUsage("2026-05-11", 1_000_000, 1_000_000),
       makeUsage("2026-05-13", 1_000_000, 1_000_000),
     ];
-    const { weeklyCostStack } = aggregateByWeek(rows, "UTC");
+    const { weeklyCostStack } = aggregateByWeek(rows, "UTC", 1);
     expect(weeklyCostStack).toHaveLength(1);
     expect(weeklyCostStack[0]?.total).toBeCloseTo(36, 2);
+  });
+
+  it("emits trailing calendar weeks pinned to today, dropping older populated weeks", () => {
+    // Regression for MUL-2382 weekly window scoping:
+    // before the fix, aggregateByWeek built buckets only for weeks that had
+    // data and the caller did `.slice(-weekCount)`. With sparse data (an old
+    // populated week far outside the selected window plus an empty stretch
+    // closer to today), that slice would surface the OLD populated week
+    // instead of the trailing in-window weeks. The chart should now show
+    // exactly the trailing calendar weeks, with the empty in-range weeks
+    // present as zero-valued buckets rather than disappearing.
+    vi.setSystemTime(new Date("2026-05-19T12:00:00Z"));
+    // 30-day window @ 2026-05-19 → 5 trailing weeks (Mon=04-20, 04-27,
+    // 05-04, 05-11, 05-18). 2026-04-13 (Mon) is one week earlier — outside
+    // the window. No data in any of the 5 in-range weeks.
+    const rows = [makeUsage("2026-04-13", 1_000_000, 1_000_000)];
+    const { weeklyTokens, weeklyCostStack } = aggregateByWeek(rows, "UTC", 5);
+
+    expect(weeklyTokens.map((w) => w.weekStart)).toEqual([
+      "2026-04-20",
+      "2026-04-27",
+      "2026-05-04",
+      "2026-05-11",
+      "2026-05-18",
+    ]);
+    // Every in-range week is empty — the old populated week was dropped.
+    for (const w of weeklyTokens) {
+      expect(w.input).toBe(0);
+      expect(w.output).toBe(0);
+      expect(w.cacheRead).toBe(0);
+      expect(w.cacheWrite).toBe(0);
+    }
+    for (const w of weeklyCostStack) {
+      expect(w.total).toBe(0);
+    }
+  });
+
+  it("keeps in-window weeks empty when nearby data sits inside the window", () => {
+    // Sparse-but-in-range case: only the oldest in-window week has data;
+    // the remaining trailing weeks must render as empty buckets, not be
+    // collapsed to a single populated bar.
+    vi.setSystemTime(new Date("2026-05-19T12:00:00Z"));
+    const rows = [makeUsage("2026-04-22", 1_000_000, 1_000_000)]; // week of 04-20
+    const { weeklyTokens } = aggregateByWeek(rows, "UTC", 5);
+    expect(weeklyTokens).toHaveLength(5);
+    expect(weeklyTokens[0]).toMatchObject({
+      weekStart: "2026-04-20",
+      input: 1_000_000,
+      output: 1_000_000,
+    });
+    for (const w of weeklyTokens.slice(1)) {
+      expect(w.input).toBe(0);
+      expect(w.output).toBe(0);
+    }
   });
 });

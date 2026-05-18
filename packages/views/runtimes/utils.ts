@@ -480,38 +480,61 @@ export function aggregateByDate(usage: RuntimeUsage[]): {
 // latest week is flagged `partial` when today (in the runtime's tz) is
 // before Sunday, so the chart can render the in-progress bar at half
 // opacity instead of letting the user misread "this week" as a dip.
+//
+// `weekCount` pins the output to exactly that many trailing calendar weeks
+// ending at the week that contains today (in `tz`). Buckets are pre-zeroed,
+// so sparse data — including weeks with no usage — renders as empty bars
+// rather than disappearing. Rows whose week falls outside the window are
+// dropped; without this guard `.slice(-weekCount)` on a sparse 180-day
+// aggregate would surface old populated weeks instead of the empty
+// in-range buckets the user asked for (MUL-2382 weekly window scoping).
 export function aggregateByWeek(
   usage: RuntimeUsage[],
   tz: string,
+  weekCount: number,
 ): {
   weeklyTokens: WeeklyTokenData[];
   weeklyCostStack: WeeklyCostStackData[];
 } {
+  const count = Math.max(1, Math.floor(weekCount));
   const today = todayIso(tz);
-  const tokenMap = new Map<string, Omit<WeeklyTokenData, "label" | "rangeLabel" | "partial" | "daysCovered" | "weekEnd">>();
+  const currentWeekStart = weekStartIso(today);
+  const firstWeekStart = addDaysIso(currentWeekStart, -(count - 1) * 7);
+
+  type TokenAgg = Omit<WeeklyTokenData, "label" | "rangeLabel" | "partial" | "daysCovered" | "weekEnd">;
+  const tokenMap = new Map<string, TokenAgg>();
   const stackMap = new Map<string, { input: number; output: number; cacheWrite: number }>();
 
-  for (const u of usage) {
-    const wkStart = weekStartIso(u.date);
-    const tokens = tokenMap.get(wkStart) ?? {
+  // Pre-seed every trailing calendar week in the window so sparse / empty
+  // weeks still render as zero bars instead of being dropped.
+  for (let i = 0; i < count; i++) {
+    const wkStart = addDaysIso(firstWeekStart, i * 7);
+    tokenMap.set(wkStart, {
       weekStart: wkStart,
       input: 0,
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
-    };
+    });
+    stackMap.set(wkStart, { input: 0, output: 0, cacheWrite: 0 });
+  }
+
+  for (const u of usage) {
+    const wkStart = weekStartIso(u.date);
+    if (wkStart < firstWeekStart || wkStart > currentWeekStart) continue;
+    const tokens = tokenMap.get(wkStart);
+    if (!tokens) continue;
     tokens.input += u.input_tokens;
     tokens.output += u.output_tokens;
     tokens.cacheRead += u.cache_read_tokens;
     tokens.cacheWrite += u.cache_write_tokens;
-    tokenMap.set(wkStart, tokens);
 
     const breakdown = estimateCostBreakdown(u);
-    const stack = stackMap.get(wkStart) ?? { input: 0, output: 0, cacheWrite: 0 };
+    const stack = stackMap.get(wkStart);
+    if (!stack) continue;
     stack.input += breakdown.input;
     stack.output += breakdown.output;
     stack.cacheWrite += breakdown.cacheWrite;
-    stackMap.set(wkStart, stack);
   }
 
   const decorate = (weekStart: string) => {
