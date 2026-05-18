@@ -1,7 +1,8 @@
 "use client";
 
 import { type ReactNode, useRef, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import { Button } from "@multica/ui/components/ui/button";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import type { OnboardingStep } from "@multica/core/onboarding";
 import { DragStrip } from "@multica/views/platform";
@@ -26,14 +27,12 @@ export interface QuestionOption {
 }
 
 /**
- * Generic per-question step used by Source / Role / Use case. The
- * parent threads in the question copy, the option list, and the
- * three callbacks (answer / skip / back). Layout is a centered
- * card grid with an editorial heading; below the grid sits a
- * three-button action row — Back, Skip, Continue — keeping the
- * controls visually anchored to the content rather than floating
- * at the page edge. Continue is the only path that advances, so
- * users can change their selection before committing.
+ * Generic per-question step used by Source / Role / Use case. Adopts
+ * the same 3-region chrome as Workspace / Runtime / Agent: Back lives
+ * in the page header next to the step indicator; Skip + Continue live
+ * in a sticky footer with a status hint. This keeps the back/skip/
+ * continue affordance in the same on-screen position across every step
+ * of onboarding.
  */
 export function StepQuestion({
   step,
@@ -94,10 +93,29 @@ export function StepQuestion({
     if (canContinue) onAdvance();
   };
 
+  const selectedLabel = selectedOption?.label ?? null;
+  const footerHint = canContinue
+    ? selectedLabel
+      ? t(($) => $.step_runtime.hint_selected, { name: selectedLabel })
+      : t(($) => $.step_question.hint_continue)
+    : t(($) => $.step_question.hint_pick);
+
   return (
     <div className="animate-onboarding-enter flex h-full min-h-0 flex-col bg-background">
       <DragStrip />
-      <header className="flex shrink-0 items-center bg-background px-6 py-3 sm:px-10 md:px-14 lg:px-16">
+      <header className="flex shrink-0 items-center gap-4 bg-background px-6 py-3 sm:px-10 md:px-14 lg:px-16">
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            {t(($) => $.common.back)}
+          </button>
+        ) : (
+          <span aria-hidden className="w-0" />
+        )}
         <div className="flex-1">
           <StepHeader currentStep={step} />
         </div>
@@ -108,7 +126,7 @@ export function StepQuestion({
         style={fadeStyle}
         className="min-h-0 flex-1 overflow-y-auto"
       >
-        <div className="mx-auto w-full max-w-[920px] px-6 py-10 sm:px-10 md:px-14 lg:py-16">
+        <div className="mx-auto w-full max-w-[920px] px-6 py-10 sm:px-10 md:px-14 lg:py-14">
           {eyebrow ? (
             <div className="mb-2 text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
               {eyebrow}
@@ -150,36 +168,24 @@ export function StepQuestion({
               ),
             )}
           </fieldset>
-
-          <div className="mt-8 flex items-center gap-2">
-            {onBack ? (
-              <button
-                type="button"
-                onClick={onBack}
-                className="flex items-center gap-1.5 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                {t(($) => $.common.back)}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={onSkip}
-              className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
-            >
-              {t(($) => $.common.skip)}
-            </button>
-            <button
-              type="button"
-              onClick={confirmAdvance}
-              disabled={!canContinue}
-              className="ml-auto rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
-            >
-              {t(($) => $.common.continue)}
-            </button>
-          </div>
         </div>
       </main>
+
+      <footer className="flex shrink-0 items-center justify-end gap-4 bg-background px-6 py-4 sm:px-10 md:px-14 lg:px-16">
+        <span
+          aria-live="polite"
+          className="mr-auto text-xs text-muted-foreground"
+        >
+          {footerHint}
+        </span>
+        <Button variant="secondary" onClick={onSkip}>
+          {t(($) => $.common.skip)}
+        </Button>
+        <Button size="lg" disabled={!canContinue} onClick={confirmAdvance}>
+          {t(($) => $.common.continue)}
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+      </footer>
     </div>
   );
 }

@@ -90,6 +90,10 @@
     "other_label": "其他",
     "other_aria": "描述其他选项"
   },
+  "step_question": {
+    "hint_pick": "选一项继续 —— 不想说也可以跳过。",
+    "hint_continue": "可以了。准备好就点继续。"
+  },
   "runtime_aside": {
     "what_eyebrow": "什么是运行时？",
     "what_prefix": "",
@@ -249,11 +253,11 @@
     }
   },
   "step_runtime": {
-    "scanning_headline": "正在寻找你的工具...",
-    "scanning_lede_prefix": "Multica 驱动本地的 AI 编程工具，比如 ",
-    "scanning_lede_suffix": " 等。等待你机器上的反馈中。",
-    "found_headline": "找到了你的运行时。",
-    "found_lede": "扫描到你机器上已经设置好的 AI 编码工具。挑一个给你的第一个智能体。",
+    "scanning_headline": "你的智能体在哪里运行？",
+    "scanning_lede_prefix": "智能体借助本地已安装的 AI 编程工具运行，例如 ",
+    "scanning_lede_suffix": " 等。我们正在检测你机器上装了哪些。",
+    "found_headline": "你的智能体将在这里运行。",
+    "found_lede": "这些是我们在本机找到的 AI 编程工具。挑一个支撑你的第一个智能体 —— 之后可以随时切换或再加。",
     "runtime_count_other": "{{count}} 个运行时",
     "status_all_online": "全部在线",
     "status_none_online": "全部离线",
@@ -282,9 +286,9 @@
     "hint_skip_or_waitlist": "跳过进入工作区，或在上方加入云候补。"
   },
   "step_platform": {
-    "eyebrow": "第 3 步 · 运行时",
-    "headline": "挑一个运行时来源。",
-    "lede": "运行时是智能体真正执行 task 的地方。挑一种安装方式让本机出现一个运行时。",
+    "eyebrow": "智能体在哪里运行",
+    "headline": "你的智能体在哪里运行？",
+    "lede": "智能体需要在本机有一个真正执行任务的地方。选一种适合你的安装方式。",
     "hint_default": "在上方挑一条路 —— 或跳过，之后再配置运行时。",
     "hint_downloaded": "在下载页完成安装，然后回到此标签页。",
     "hint_waitlist": "已在候补名单 —— 选择\"跳过\"继续探索。",

@@ -90,6 +90,10 @@
     "other_label": "Other",
     "other_aria": "Describe something else"
   },
+  "step_question": {
+    "hint_pick": "Pick one to continue — or skip if you'd rather not say.",
+    "hint_continue": "Looks good. Hit Continue when you're ready."
+  },
   "runtime_aside": {
     "what_eyebrow": "What's a runtime?",
     "what_prefix": "A ",
@@ -249,11 +253,11 @@
     }
   },
   "step_runtime": {
-    "scanning_headline": "Looking for your tools…",
-    "scanning_lede_prefix": "Multica drives local AI coding tools like ",
-    "scanning_lede_suffix": ", and others. We're waiting to hear back from your machine about which ones are installed.",
-    "found_headline": "We found your runtimes.",
-    "found_lede": "We scanned your machine for AI coding tools you've already set up. Pick one for your first agent.",
+    "scanning_headline": "Where will your agents run?",
+    "scanning_lede_prefix": "Agents run by piggybacking on local AI coding tools like ",
+    "scanning_lede_suffix": ", and others. We're checking your machine for ones you've already installed.",
+    "found_headline": "Where your agents will run.",
+    "found_lede": "These are the AI coding tools we found on this machine. Pick one to power your first agent — you can switch or add more later.",
     "runtime_count_one": "{{count}} runtime",
     "runtime_count_other": "{{count}} runtimes",
     "status_all_online": "all online",
@@ -283,9 +287,9 @@
     "hint_skip_or_waitlist": "Skip to enter your workspace, or join the cloud waitlist above."
   },
   "step_platform": {
-    "eyebrow": "Step 3 · Runtime",
-    "headline": "Pick a runtime source.",
-    "lede": "A runtime is where your agents' tasks actually execute. Pick how you'd like to install one on this machine.",
+    "eyebrow": "Where your agents run",
+    "headline": "Where will your agents run?",
+    "lede": "Your agents need somewhere on this machine to actually execute work. Pick how you'd like to set that up.",
     "hint_default": "Pick a path above — or skip and configure a runtime later.",
     "hint_downloaded": "Finish setup on the download page, then come back to this tab.",
     "hint_waitlist": "You're on the waitlist — pick Skip to keep exploring.",

@@ -222,6 +222,8 @@ describe("StepRuntimeConnect — onboarding_runtime_detected", () => {
     // shell around the effect.
     setPicker({ runtimes: [] });
     renderStep();
-    expect(screen.getByText(/Looking for your tools/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Where will your agents run/i),
+    ).toBeInTheDocument();
   });
 });
