@@ -62,8 +62,12 @@ type TaskContextForEnv struct {
 	AutopilotTriggerPayload string
 	QuickCreatePrompt       string // non-empty for quick-create tasks
 	IsSquadLeader           bool   // true when the agent is acting as a squad leader (may exit silently on no_action)
-
-  // RequestingUserName + RequestingUserProfileDescription describe the
+	// WorkspaceContext is the workspace-level system prompt (workspace.context
+	// in the DB). Rendered into the brief as `## Workspace Context` when
+	// non-empty so every agent in the workspace sees the same shared context,
+	// regardless of issue / chat / autopilot / quick-create.
+	WorkspaceContext string
+	// RequestingUserName + RequestingUserProfileDescription describe the
 	// human the agent is acting on behalf of. v1 sources them from the
 	// runtime owner (the user who registered the daemon). Rendered into the
 	// brief as the `## Requesting User` section only when description is
@@ -73,7 +77,6 @@ type TaskContextForEnv struct {
 	RequestingUserProfileDescription string
 
 	// Knowledge base context — populated from workspace_document tables.
-	WorkspaceContext     string               // workspace.context content (injected verbatim)
 	PinnedDocuments      []DocumentForEnv     // pinned docs with full content
 	DocumentIndex        []DocumentIndexEntry // compact (path, description) index
 	IssueLinkedDocuments []DocumentForEnv     // docs linked to this issue
